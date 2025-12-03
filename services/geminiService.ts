@@ -1,13 +1,21 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AppState, TransactionCategory } from "../types";
 
-// Inicializa a IA usando process.env.API_KEY conforme diretrizes
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// NÃO inicialize a classe aqui fora, pois se a chave for undefined no carregamento, o app quebra (Tela Branca).
+// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY }); 
 
 export const extractFinancialData = async (
   fileContent: string
 ): Promise<Partial<AppState> & { detectedClientName?: string }> => {
   const model = "gemini-2.5-flash";
+
+  // Inicialização segura dentro da função (Lazy Load)
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key não configurada. Verifique as variáveis de ambiente (VITE_API_KEY) no Vercel.");
+  }
+  
+  const ai = new GoogleGenAI({ apiKey: apiKey });
 
   const categoriesList = Object.values(TransactionCategory).join(', ');
 
