@@ -1,0 +1,5 @@
+{
+  "name": "FinPlanner",
+  "description": "A comprehensive financial extraction and management system powered by Gemini AI. Processes bank statements, categorizes transactions, and projects long-term wealth across 12 specialized modules.",
+  "requestFramePermissions": []
+}
