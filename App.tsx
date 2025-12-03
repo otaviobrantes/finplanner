@@ -21,10 +21,13 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
   if (cat.includes('Restaurante') || cat.includes('Viagem') || cat.includes('Lazer') || cat.includes('Social') || cat.includes('Netflix')) return 'Social';
   if (cat.includes('Saúde') || cat.includes('Médico') || cat.includes('Hospital') || cat.includes('Dentista') || cat.includes('Farmácia')) return 'Saúde';
   if (cat.includes('Salário') || cat.includes('Receita') || cat.includes('Dividendo')) return 'Receitas';
-  if (cat.includes('Presente')) return 'Presentes';
-  if (cat.includes('Seguro') || cat.includes('Juros')) return 'Financeiro';
+  if (cat.includes('Presente') || cat.includes('Festas')) return 'Presentes';
+  if (cat.includes('Seguro') || cat.includes('Juros') || cat.includes('Doações') || cat.includes('Planejador')) return 'Financeiro';
   if (cat.includes('Consultora') || cat.includes('Arrumação') || cat.includes('Costureira')) return 'Extra';
   if (cat.includes('Entidade')) return 'Profissional';
+  if (cat.includes('Diversos') || cat.includes('Outros')) return 'Outros';
+  
+  // Default fallback (apenas se for algo realmente essencial como mercado, aluguel, etc)
   return 'Essencial';
 };
 
@@ -549,7 +552,24 @@ export default function App() {
     </div>
   );
 
-  const renderBudget = () => (
+  const renderBudget = () => {
+    // Lista completa de grupos para garantir que todas as transações sejam exibidas
+    const allGroups = ['Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+
+    // Calculando totais para exibir apenas o que tem dados ou mensagem de vazio
+    const totalTransactions = data.transactions.length;
+    
+    if (totalTransactions === 0) {
+        return (
+            <div className="bg-white p-12 rounded-xl border border-dashed border-gray-300 text-center">
+                <Calculator className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Sem dados de orçamento</h3>
+                <p className="text-gray-500 mt-2">Faça o upload de extratos na página 11 para visualizar a análise.</p>
+            </div>
+        );
+    }
+
+    return (
       <div className="space-y-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 mb-2">Visão Geral do Orçamento</h3>
@@ -561,7 +581,7 @@ export default function App() {
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 p-6 border-b">Detalhamento por Categoria</h3>
             <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                {['Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra'].map(group => {
+                {allGroups.map(group => {
                     const groupTrans = data.transactions.filter(t => t.type === group);
                     const total = groupTrans.reduce((acc, t) => acc + Math.abs(t.amount), 0);
                     if (total === 0) return null;
@@ -588,7 +608,8 @@ export default function App() {
             </div>
         </div>
       </div>
-  );
+    );
+  };
 
   const renderRealized = () => {
     // Ordenar categorias alfabeticamente para o dropdown
@@ -694,7 +715,35 @@ export default function App() {
   
   // PAGINA 6 - RESUMO SIMULAÇÃO
   const renderSimulationSummary = () => {
-    const projection = calculateProjection();
+    // Calcular dados iniciais se estiverem zerados (ex: pegar do ativo total e renda mensal)
+    const activePatrimony = data.assets.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const estimatedMonthlySave = Math.max(0, data.personalData.netIncomeAnnual / 12 * 0.2); // Estima 20% se não houver dado
+    
+    // Se a simulação estiver zerada, usa os dados reais como base visual (sem salvar ainda)
+    const simConfig = {
+        ...data.simulation,
+        initialPatrimony: data.simulation.initialPatrimony || activePatrimony,
+        monthlyContribution: data.simulation.monthlyContribution || estimatedMonthlySave
+    };
+
+    // Recalcula projeção com base nos dados possivelmente ajustados
+    const projection = [];
+    let currentBalance = simConfig.initialPatrimony;
+    let totalInvested = simConfig.initialPatrimony;
+    const monthlyRate = Math.pow(1 + simConfig.interestRateReal, 1/12) - 1;
+
+    for (let year = 0; year <= simConfig.years; year++) {
+      projection.push({
+        year: new Date().getFullYear() + year,
+        value: Math.round(currentBalance),
+        invested: Math.round(totalInvested)
+      });
+      for (let m = 0; m < 12; m++) {
+        currentBalance = currentBalance * (1 + monthlyRate) + simConfig.monthlyContribution;
+        totalInvested += simConfig.monthlyContribution;
+      }
+    }
+
     const finalValue = projection[projection.length - 1].value;
     const finalInvested = projection[projection.length - 1].invested;
 
@@ -703,7 +752,7 @@ export default function App() {
           <div className="flex justify-between items-end border-b pb-4">
               <div>
                 <h3 className="text-xl font-bold text-gray-800">Resumo da Simulação</h3>
-                <p className="text-gray-500">Evolução patrimonial projetada para {data.simulation.years} anos.</p>
+                <p className="text-gray-500">Evolução patrimonial projetada para {simConfig.years} anos.</p>
               </div>
               <div className="text-right">
                   <p className="text-sm text-gray-500">Patrimônio Final Projetado</p>
@@ -724,7 +773,7 @@ export default function App() {
               </div>
               <div className="p-4 bg-purple-50 rounded-lg">
                   <p className="text-sm text-purple-700 font-medium">Multiplicador</p>
-                  <p className="text-xl font-bold text-purple-900">{(finalValue / finalInvested).toFixed(2)}x</p>
+                  <p className="text-xl font-bold text-purple-900">{(finalValue / (finalInvested || 1)).toFixed(2)}x</p>
                   <p className="text-xs text-purple-600">seu dinheiro investido</p>
               </div>
           </div>
@@ -814,7 +863,7 @@ export default function App() {
   // PAGINA 8 - SIMULAÇÃO SEM PERPETUIDADE (Consumo de Capital)
   const renderDecumulation = () => {
     // Cálculo simplificado: Quanto dura o dinheiro se parar de aportar e começar a sacar X?
-    const patrimony = data.simulation.initialPatrimony + (data.simulation.monthlyContribution * 12 * 10); // Supor 10 anos de acumulação
+    const patrimony = (data.simulation.initialPatrimony || 0) + (data.simulation.monthlyContribution * 12 * 10); // Supor 10 anos de acumulação
     const monthlyWithdrawal = 10000; // Exemplo fixo ou configurável
     const yearsToZero = Math.log(monthlyWithdrawal / (monthlyWithdrawal - patrimony * (data.simulation.interestRateReal/12))) / Math.log(1 + data.simulation.interestRateReal/12) / 12;
 
@@ -839,7 +888,7 @@ export default function App() {
                  </div>
                  <div className="border p-6 rounded-xl bg-gray-50 flex flex-col justify-center items-center">
                      <h4 className="font-bold text-gray-600 mb-2">Longevidade do Capital</h4>
-                     <p className="text-5xl font-bold text-blue-600">{isNaN(yearsToZero) ? '∞' : Math.floor(yearsToZero)}</p>
+                     <p className="text-5xl font-bold text-blue-600">{(isNaN(yearsToZero) || yearsToZero < 0) ? '∞' : Math.floor(yearsToZero)}</p>
                      <p className="text-gray-500">anos de duração</p>
                      <p className="text-xs text-gray-400 mt-2 text-center max-w-xs">Considerando que o dinheiro restante continua rendendo {data.simulation.interestRateReal * 100}% a.a.</p>
                  </div>
@@ -850,11 +899,24 @@ export default function App() {
 
   // PAGINA 9 - PROJEÇÃO E CENÁRIOS
   const renderProjectionScenarios = () => {
-    const years = data.simulation.years;
+    // Check de segurança se não houver simulação
+    const years = data.simulation.years || 30;
+    const initial = data.simulation.initialPatrimony || 0;
+    
+    if (initial === 0 && data.simulation.monthlyContribution === 0) {
+        return (
+            <div className="bg-white p-12 rounded-xl border border-dashed text-center">
+                <LineChart className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Sem dados para projeção</h3>
+                <p className="text-gray-500 mt-2">Cadastre ativos ou aportes na simulação para ver os cenários.</p>
+            </div>
+        )
+    }
+
     const dataPoints = [];
-    let p = data.simulation.initialPatrimony; // Pessimista (4%)
-    let r = data.simulation.initialPatrimony; // Realista (6%)
-    let o = data.simulation.initialPatrimony; // Otimista (10%)
+    let p = initial; // Pessimista (4%)
+    let r = initial; // Realista (6%)
+    let o = initial; // Otimista (10%)
     const contrib = data.simulation.monthlyContribution * 12;
 
     for(let y=0; y<=years; y++) {
@@ -868,6 +930,9 @@ export default function App() {
         r = (r + contrib) * 1.06;
         o = (o + contrib) * 1.10;
     }
+    
+    // Safety check for array access
+    const finalData = dataPoints[dataPoints.length - 1] || dataPoints[0];
 
     return (
         <div className="bg-white p-6 rounded-xl shadow-sm space-y-6">
@@ -879,15 +944,15 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center mt-6">
                 <div className="p-4 border-t-4 border-orange-400 bg-orange-50">
                     <p className="font-bold text-orange-900">Pessimista (4% a.a.)</p>
-                    <p className="text-lg">{dataPoints[years].pessimista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
+                    <p className="text-lg">{finalData.pessimista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
                 </div>
                 <div className="p-4 border-t-4 border-teal-400 bg-teal-50">
                     <p className="font-bold text-teal-900">Realista (6% a.a.)</p>
-                    <p className="text-lg font-bold">{dataPoints[years].realista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
+                    <p className="text-lg font-bold">{finalData.realista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
                 </div>
                 <div className="p-4 border-t-4 border-blue-400 bg-blue-50">
                     <p className="font-bold text-blue-900">Otimista (10% a.a.)</p>
-                    <p className="text-lg">{dataPoints[years].otimista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
+                    <p className="text-lg">{finalData.otimista.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
                 </div>
             </div>
         </div>
