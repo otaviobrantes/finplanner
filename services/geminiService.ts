@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AppState, TransactionCategory } from "../types";
 
+// Inicializa a IA usando process.env.API_KEY conforme diretrizes
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const extractFinancialData = async (
