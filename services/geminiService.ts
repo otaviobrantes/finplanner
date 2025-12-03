@@ -1,16 +1,25 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AppState, TransactionCategory } from "../types";
 
-// Helper para ler variáveis de ambiente de forma segura no Vite
+// Declaração da constante global injetada pelo Vite (vite.config.ts)
+declare const __GEMINI_API_KEY__: string | undefined;
+
+// Helper para ler variáveis de ambiente de forma segura
 const getApiKey = (): string => {
-  // Padrão nativo do Vite para variáveis de ambiente
+  // 1. Prioridade: Constante injetada no Build (Hardcoded pelo Vite)
+  // Isso resolve o problema do Vercel não expor variáveis em tempo de execução
+  if (typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__) {
+    return __GEMINI_API_KEY__;
+  }
+
+  // 2. Fallback: Padrão nativo do Vite
   // @ts-ignore
   if (import.meta.env && import.meta.env.VITE_API_KEY) {
     // @ts-ignore
     return import.meta.env.VITE_API_KEY;
   }
   
-  // Fallback para desenvolvimento local ou configurações antigas
+  // 3. Fallback final para Node/Localhost (process.env)
   if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
     return process.env.API_KEY;
   }
@@ -27,8 +36,10 @@ export const extractFinancialData = async (
   const rawApiKey = getApiKey();
   const apiKey = rawApiKey ? rawApiKey.trim() : "";
   
+  // Log discreto para debug (mostra apenas os 4 primeiros caracteres)
+  console.log(`[FinPlanner] API Key carregada: ${apiKey ? apiKey.substring(0, 4) + '...' : 'NÃO ENCONTRADA'}`);
+  
   if (!apiKey) {
-    console.error("DEBUG: API Key está vazia/indefinida.");
     throw new Error("ERRO FATAL: API Key não encontrada. Certifique-se de que a variável 'VITE_API_KEY' está configurada no Vercel (Environment Variables) e que você fez o Redeploy após adicionar.");
   }
   

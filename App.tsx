@@ -15,6 +15,9 @@ import { Auth } from './components/Auth';
 
 type UploadStatus = 'idle' | 'uploading' | 'extracting' | 'completed' | 'error';
 
+// Declaração global para checagem de debug
+declare const __GEMINI_API_KEY__: string | undefined;
+
 // Helper to determine group from category (Logic duplicated from GeminiService for consistency)
 const getCategoryGroup = (cat: string): CategoryGroup => {
   if (cat.includes('Transporte') || cat.includes('Carro') || cat.includes('Uber') || cat.includes('Combustível')) return 'Transporte';
@@ -971,49 +974,61 @@ export default function App() {
     </div>
   );
   
-  const renderUpload = () => (
-    <div className="max-w-3xl mx-auto space-y-6 pb-20">
-      <div className="text-center">
-        <h2 className="text-2xl font-bold">11. Upload Inteligente</h2>
-        <p className="text-gray-500">Carregue extratos bancários (PDF) ou planilhas para análise automática.</p>
-        {!data.selectedClientId && (
-            <div className="mt-2 text-amber-600 text-sm bg-amber-50 inline-block px-3 py-1 rounded-full">
-                ⚠️ Nenhum cliente selecionado. O sistema tentará identificar o nome no arquivo.
+  const renderUpload = () => {
+    // Check de debug da chave API
+    const isApiConfigured = typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__ && __GEMINI_API_KEY__.length > 0;
+    
+    return (
+      <div className="max-w-3xl mx-auto space-y-6 pb-20">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold">11. Upload Inteligente</h2>
+          <p className="text-gray-500">Carregue extratos bancários (PDF) ou planilhas para análise automática.</p>
+          
+          <div className="mt-2 flex justify-center gap-2">
+            {!data.selectedClientId && (
+                <div className="text-amber-600 text-xs bg-amber-50 inline-block px-3 py-1 rounded-full border border-amber-200">
+                    ⚠️ Nenhum cliente selecionado
+                </div>
+            )}
+            
+            <div className={`text-xs px-3 py-1 rounded-full border ${isApiConfigured ? 'text-green-600 bg-green-50 border-green-200' : 'text-red-600 bg-red-50 border-red-200'}`}>
+                {isApiConfigured ? 'API Key: Configurada ✅' : 'API Key: Ausente ❌ (Verifique Vercel)'}
+            </div>
+          </div>
+        </div>
+
+        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".pdf,.csv,.ofx,.txt" />
+
+        <div onClick={triggerFileInput} className={`bg-white p-8 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-blue-50 transition-colors ${uploadStatus === 'error' ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}>
+            {uploadStatus === 'idle' && <><UploadCloud className="w-10 h-10 text-gray-400 mb-2" /><p>Clique para selecionar arquivo</p></>}
+            {uploadStatus === 'uploading' && <><Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-2" /><p>Enviando {uploadProgress}%</p></>}
+            {uploadStatus === 'extracting' && <><FileText className="w-10 h-10 text-blue-500 animate-pulse mb-2" /><p>Lendo arquivo...</p></>}
+            {uploadStatus === 'completed' && <><CheckCircle2 className="w-10 h-10 text-green-500 mb-2" /><p className="font-bold">{uploadedFile?.name}</p><p className="text-sm text-green-600">Pronto para processar</p></>}
+            {uploadStatus === 'error' && <><AlertCircle className="w-10 h-10 text-red-500 mb-2" /><p>Erro no upload</p></>}
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border">
+            <textarea value={inputText} onChange={e => setInputText(e.target.value)} className="w-full h-32 text-xs font-mono bg-gray-50 p-2 rounded resize-none outline-none" placeholder="Conteúdo do arquivo..." />
+            <div className="mt-4 flex justify-end">
+                <button 
+                  onClick={handleProcess} 
+                  disabled={isProcessing || uploadStatus !== 'completed'}
+                  className={`px-6 py-2 rounded-lg font-bold text-white flex items-center gap-2 ${isProcessing || uploadStatus !== 'completed' ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}
+                >
+                    {isProcessing ? <Loader2 className="animate-spin w-4 h-4" /> : <TrendingUp className="w-4 h-4" />} 
+                    {isProcessing ? 'Extrair Dados' : 'Extrair Dados'}
+                </button>
+            </div>
+        </div>
+        
+        {processingLog.length > 0 && (
+            <div className="bg-gray-900 text-green-400 p-4 rounded-xl font-mono text-xs h-32 overflow-y-auto">
+                {processingLog.map((log, i) => <div key={i} className="mb-1">{log}</div>)}
             </div>
         )}
       </div>
-
-      <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".pdf,.csv,.ofx,.txt" />
-
-      <div onClick={triggerFileInput} className={`bg-white p-8 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-blue-50 transition-colors ${uploadStatus === 'error' ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}>
-          {uploadStatus === 'idle' && <><UploadCloud className="w-10 h-10 text-gray-400 mb-2" /><p>Clique para selecionar arquivo</p></>}
-          {uploadStatus === 'uploading' && <><Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-2" /><p>Enviando {uploadProgress}%</p></>}
-          {uploadStatus === 'extracting' && <><FileText className="w-10 h-10 text-blue-500 animate-pulse mb-2" /><p>Lendo arquivo...</p></>}
-          {uploadStatus === 'completed' && <><CheckCircle2 className="w-10 h-10 text-green-500 mb-2" /><p className="font-bold">{uploadedFile?.name}</p><p className="text-sm text-green-600">Pronto para processar</p></>}
-          {uploadStatus === 'error' && <><AlertCircle className="w-10 h-10 text-red-500 mb-2" /><p>Erro no upload</p></>}
-      </div>
-
-      <div className="bg-white p-4 rounded-xl border">
-          <textarea value={inputText} onChange={e => setInputText(e.target.value)} className="w-full h-32 text-xs font-mono bg-gray-50 p-2 rounded resize-none outline-none" placeholder="Conteúdo do arquivo..." />
-          <div className="mt-4 flex justify-end">
-              <button 
-                onClick={handleProcess} 
-                disabled={isProcessing || uploadStatus !== 'completed'}
-                className={`px-6 py-2 rounded-lg font-bold text-white flex items-center gap-2 ${isProcessing || uploadStatus !== 'completed' ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}
-              >
-                  {isProcessing ? <Loader2 className="animate-spin w-4 h-4" /> : <TrendingUp className="w-4 h-4" />} 
-                  {isProcessing ? 'Extrair Dados' : 'Extrair Dados'}
-              </button>
-          </div>
-      </div>
-      
-      {processingLog.length > 0 && (
-          <div className="bg-gray-900 text-green-400 p-4 rounded-xl font-mono text-xs h-32 overflow-y-auto">
-              {processingLog.map((log, i) => <div key={i} className="mb-1">{log}</div>)}
-          </div>
-      )}
-    </div>
-  );
+    );
+  };
 
   const TABS = [
     { id: 0, title: '1. Resumo Pessoal', icon: Activity, render: renderSummary },
