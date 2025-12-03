@@ -7,10 +7,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Expose API_KEY to process.env.API_KEY as required by the Gemini SDK guidelines
+      // Define explicitamente process.env.API_KEY com o valor das variáveis de ambiente
       'process.env.API_KEY': JSON.stringify(env.API_KEY || env.VITE_API_KEY),
-      // Garante compatibilidade caso alguma lib legada use process.env
-      'process.env': {} 
+      // IMPORTANTE: Não definimos 'process.env': {} vazio aqui pois isso pode sobrescrever a chave acima em alguns contextos
     }
   };
 });
