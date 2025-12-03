@@ -3,16 +3,18 @@ import { AppState, TransactionCategory } from "../types";
 
 // Helper para ler variáveis de ambiente de forma segura no Vite
 const getApiKey = (): string => {
-  // 1. Tenta ler via process.env (injetado pelo vite.config.ts)
-  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-    return process.env.API_KEY;
-  }
-  // 2. Fallback: Tenta ler via import.meta.env (Padrão nativo do Vite/Vercel)
+  // Padrão nativo do Vite para variáveis de ambiente
   // @ts-ignore
   if (import.meta.env && import.meta.env.VITE_API_KEY) {
     // @ts-ignore
     return import.meta.env.VITE_API_KEY;
   }
+  
+  // Fallback para desenvolvimento local ou configurações antigas
+  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    return process.env.API_KEY;
+  }
+  
   return "";
 };
 
@@ -26,8 +28,8 @@ export const extractFinancialData = async (
   const apiKey = rawApiKey ? rawApiKey.trim() : "";
   
   if (!apiKey) {
-    console.error("DEBUG: API Key está vazia. Verifique VITE_API_KEY no Vercel.");
-    throw new Error("API Key não encontrada. Verifique se a variável 'VITE_API_KEY' está configurada no Vercel e se você fez o Redeploy após adicionar.");
+    console.error("DEBUG: API Key está vazia/indefinida.");
+    throw new Error("ERRO FATAL: API Key não encontrada. Certifique-se de que a variável 'VITE_API_KEY' está configurada no Vercel (Environment Variables) e que você fez o Redeploy após adicionar.");
   }
   
   const ai = new GoogleGenAI({ apiKey: apiKey });
