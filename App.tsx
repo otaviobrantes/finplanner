@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
-  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar
+  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
@@ -26,6 +26,104 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
   if (cat.includes('Consultora') || cat.includes('Arrumação') || cat.includes('Costureira')) return 'Extra';
   if (cat.includes('Entidade')) return 'Profissional';
   return 'Essencial';
+};
+
+// Componente Modal de Troca de Senha
+const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (newPassword.length < 6) {
+      setError('A senha deve ter pelo menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError('As senhas não coincidem.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // 1. Atualiza a senha
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      if (updateError) throw updateError;
+
+      // 2. Remove a flag de troca obrigatória
+      const { error: metaError } = await supabase.auth.updateUser({
+        data: { force_password_change: false }
+      });
+      if (metaError) throw metaError;
+
+      alert('Senha alterada com sucesso!');
+      onClose(); // Fecha o modal e recarrega a sessão
+    } catch (err: any) {
+      setError(err.message || 'Erro ao alterar senha.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/90 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
+        <div className="flex flex-col items-center mb-6">
+          <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
+            <Key className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900">Troca de Senha Obrigatória</h2>
+          <p className="text-center text-gray-500 mt-2 text-sm">
+            Por segurança, você precisa redefinir sua senha provisória antes de continuar.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nova Senha</label>
+            <input 
+              type="password" 
+              required
+              className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Mínimo 6 caracteres"
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Confirmar Nova Senha</label>
+            <input 
+              type="password" 
+              required
+              className="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Repita a senha"
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+            />
+          </div>
+
+          {error && (
+            <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg flex items-center gap-2">
+              <AlertCircle className="w-4 h-4" /> {error}
+            </div>
+          )}
+
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="animate-spin" /> : 'Atualizar Senha e Entrar'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 };
 
 export default function App() {
@@ -56,19 +154,35 @@ export default function App() {
   // Date Filter State for Page 3
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
+  // Force Password Change State
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoadingSession(false);
-      if (session?.user) loadClients(session.user.id);
+      if (session?.user) {
+        // Checa se precisa trocar senha
+        if (session.user.user_metadata?.force_password_change) {
+          setMustChangePassword(true);
+        } else {
+          loadClients(session.user.id);
+        }
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session?.user) {
-          loadClients(session.user.id);
+          if (session.user.user_metadata?.force_password_change) {
+            setMustChangePassword(true);
+          } else {
+            setMustChangePassword(false);
+            loadClients(session.user.id);
+          }
       } else {
           setData(INITIAL_STATE);
+          setMustChangePassword(false);
       }
     });
 
@@ -277,6 +391,16 @@ export default function App() {
           addLog("SUCESSO: Dados salvos e vinculados.");
           // Se não estava selecionado, seleciona agora e carrega para atualizar IDs
           handleSelectClient(targetClientId);
+          
+          // Recarregar dados para garantir IDs corretos (fix para edição instantânea)
+          const refreshedData = await fetchClientData(targetClientId);
+          if (refreshedData) {
+              setData(prev => ({
+                  ...prev,
+                  ...refreshedData,
+                  transactions: refreshedData.transactions || []
+              }));
+          }
       } else {
           addLog("ERRO ao salvar no banco: " + saveResult.error?.message);
       }
@@ -846,6 +970,9 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-gray-50 text-gray-900 relative">
+      {/* FORCE PASSWORD CHANGE MODAL */}
+      {mustChangePassword && <ForcePasswordChangeModal onClose={() => window.location.reload()} />}
+
       <aside className="w-64 bg-slate-900 text-white flex flex-col fixed h-full z-10 overflow-y-auto custom-scrollbar">
         <div className="p-6 border-b border-slate-800">
           <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-teal-400 bg-clip-text text-transparent">FinPlanner</h1>
