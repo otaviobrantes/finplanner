@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
-  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key
+  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
@@ -13,10 +13,20 @@ import { AppState, INITIAL_STATE, TransactionCategory, CategoryGroup, Client } f
 import { PatrimonyChart, AllocationChart, ExpensesBarChart, ScenarioChart } from './components/FinancialCharts';
 import { Auth } from './components/Auth';
 
-type UploadStatus = 'idle' | 'uploading' | 'extracting' | 'completed' | 'error';
-
 // Declaração global para checagem de debug
 declare const __GEMINI_API_KEY__: string | undefined;
+
+// --- TYPES FOR MULTI-UPLOAD ---
+type FileStatus = 'queued' | 'uploading' | 'extracting' | 'processing_ai' | 'saving' | 'completed' | 'error';
+
+interface QueueItem {
+  id: string;
+  file: File;
+  status: FileStatus;
+  progress: number; // 0-100
+  error?: string;
+  resultMessage?: string;
+}
 
 // Helper to determine group from category (Logic duplicated from GeminiService for consistency)
 const getCategoryGroup = (cat: string): CategoryGroup => {
@@ -139,16 +149,13 @@ export default function App() {
   const [data, setData] = useState<AppState>(INITIAL_STATE);
   
   // Processing States
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [processingLog, setProcessingLog] = useState<string[]>([]);
-  const [inputText, setInputText] = useState("");
   const [isLoadingData, setIsLoadingData] = useState(false);
   
-  // File Upload State
+  // Multi-File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadedFile, setUploadedFile] = useState<{name: string, size?: string, url?: string} | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
+  const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
   
   // Success Alert State
   const [showSuccessAlert, setShowSuccessAlert] = useState(false);
@@ -168,7 +175,6 @@ export default function App() {
       setSession(session);
       setLoadingSession(false);
       if (session?.user) {
-        // Checa se precisa trocar senha
         if (session.user.user_metadata?.force_password_change) {
           setMustChangePassword(true);
         } else {
@@ -266,7 +272,7 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
-  const addLog = (msg: string) => setProcessingLog(prev => [...prev, `${new Date().toLocaleTimeString()} - ${msg}`]);
+  const addLog = (msg: string) => setProcessingLog(prev => [`${new Date().toLocaleTimeString()} - ${msg}`, ...prev]);
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -276,170 +282,137 @@ export default function App() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !session?.user) return;
+  // --- MULTI-FILE UPLOAD HANDLERS ---
 
-    const formattedSize = formatFileSize(file.size);
-    setUploadedFile({ name: file.name, size: formattedSize });
-    setUploadProgress(0);
-    setUploadStatus('uploading');
-    setProcessingLog([]);
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!event.target.files || !session?.user) return;
+
+    // Explicitly casting `file` to `File` to fix TypeScript inference issue
+    const newFiles: QueueItem[] = Array.from(event.target.files).map((file) => ({
+      id: Math.random().toString(36).substring(7),
+      file: file as File,
+      status: 'queued',
+      progress: 0
+    }));
+
+    setFileQueue(prev => [...prev, ...newFiles]);
     setShowSuccessAlert(false);
-    addLog(`Arquivo selecionado: ${file.name} (${formattedSize})`);
+  };
 
-    try {
-      addLog("Enviando para Storage Seguro...");
-      const result = await uploadStatement(file, session.user.id, (percent) => {
-        setUploadProgress(percent);
-      });
+  const removeFileFromQueue = (id: string) => {
+    setFileQueue(prev => prev.filter(item => item.id !== id));
+  };
 
-      if (result.success) {
-        addLog("Upload concluído.");
-        setUploadedFile(prev => prev ? ({ ...prev, url: result.url }) : null);
-        setUploadStatus('extracting');
-        
-        try {
-            await new Promise(r => setTimeout(r, 100));
-            const extractedText = await parseFileContent(file);
-            if (extractedText && extractedText.trim().length > 0) {
-                setInputText(extractedText);
-                addLog("Conteúdo lido com sucesso.");
-                setUploadStatus('completed');
-            } else {
-                addLog("AVISO: Texto ilegível. Scan detectado?");
-                setUploadStatus('completed');
-            }
-        } catch (parseError) {
-            console.error(parseError);
-            addLog("ERRO na leitura do PDF.");
-            setUploadStatus('error');
-        }
-
-      } else {
-        addLog(`ERRO no upload: ${result.error}`);
-        setUploadStatus('error');
-      }
-    } catch (error) {
-      console.error(error);
-      setUploadStatus('error');
-    }
+  const updateQueueItem = (id: string, updates: Partial<QueueItem>) => {
+    setFileQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
 
   const triggerFileInput = () => {
-    if (uploadStatus === 'uploading' || uploadStatus === 'extracting') return;
+    if (isProcessingQueue) return;
     fileInputRef.current?.click();
   };
 
-  const handleProcess = async () => {
+  const processQueue = async () => {
     if (!session?.user) return;
+    setIsProcessingQueue(true);
+    setProcessingLog([]);
 
-    setIsProcessing(true);
-    setShowSuccessAlert(false);
-    addLog("Iniciando análise com IA (Gemini 2.5)...");
+    // Filtra apenas itens que ainda não foram completados
+    const pendingItems = fileQueue.filter(i => i.status === 'queued' || i.status === 'error');
     
-    try {
-      const extracted = await extractFinancialData(inputText);
-      addLog("Dados extraídos e categorizados.");
-      
-      // AUTO-DETECTION LOGIC
-      let targetClientId = data.selectedClientId;
-      let targetClientName = extracted.detectedClientName || "Novo Cliente (Extraído)";
-
-      if (extracted.detectedClientName) {
-          addLog(`Nome detectado no extrato: ${extracted.detectedClientName}`);
-          
-          // Verifica se já existe cliente com esse nome (case insensitive)
-          const existingClient = data.clients.find(c => c.name.toLowerCase() === extracted.detectedClientName?.toLowerCase());
-          
-          if (existingClient) {
-              addLog(`Cliente identificado na base: ${existingClient.name}`);
-              targetClientId = existingClient.id;
-          } else {
-              addLog(`Cliente novo detectado. Criando cadastro para: ${extracted.detectedClientName}...`);
-              const newClient = await createClient(session.user.id, extracted.detectedClientName);
-              if (newClient) {
-                  setData(prev => ({ ...prev, clients: [...prev.clients, newClient] }));
-                  targetClientId = newClient.id;
-                  addLog("Cliente criado automaticamente.");
-              }
-          }
-      }
-
-      if (!targetClientId) {
-          addLog("AVISO: Nenhum cliente identificado. Selecione um cliente manualmente antes de salvar.");
-          setIsProcessing(false);
-          return;
-      }
-
-      const newData = {
-        personalData: { ...data.personalData, ...extracted.personalData },
-        transactions: extracted.transactions || [],
-        assets: extracted.assets || [],
-      };
-      
-      // Update local state immediately for feedback
-      setData(prev => ({
-          ...prev,
-          selectedClientId: targetClientId,
-          personalData: { ...prev.personalData, ...newData.personalData },
-          transactions: newData.transactions,
-          assets: newData.assets
-      }));
-
-      addLog(`Salvando dados para o cliente ID: ${targetClientId}...`);
-      const saveResult = await saveFinancialData(session.user.id, targetClientId, newData);
-      
-      if (saveResult.success) {
-          const newTransCount = (extracted.transactions || []).length;
-          setSuccessMessage(`Processamento concluído! Dados vinculados a ${targetClientName}.`);
-          setShowSuccessAlert(true);
-          addLog("SUCESSO: Dados salvos e vinculados.");
-          // Se não estava selecionado, seleciona agora e carrega para atualizar IDs
-          handleSelectClient(targetClientId);
-          
-          // Recarregar dados para garantir IDs corretos (fix para edição instantânea)
-          const refreshedData = await fetchClientData(targetClientId);
-          if (refreshedData) {
-              setData(prev => ({
-                  ...prev,
-                  ...refreshedData,
-                  transactions: refreshedData.transactions || []
-              }));
-          }
-      } else {
-          addLog("ERRO ao salvar no banco: " + saveResult.error?.message);
-      }
-      
-    } catch (err: any) {
-      addLog("ERRO FATAL: " + err.message);
-    } finally {
-      setIsProcessing(false);
+    if (pendingItems.length === 0) {
+        addLog("Nenhum arquivo pendente para processar.");
+        setIsProcessingQueue(false);
+        return;
     }
-  };
 
-  // --- SIMULATION LOGIC ---
-  const calculateProjection = () => {
-    const { initialPatrimony, monthlyContribution, interestRateReal, years } = data.simulation;
-    const projection = [];
-    let currentBalance = initialPatrimony;
-    let totalInvested = initialPatrimony;
-    const monthlyRate = Math.pow(1 + interestRateReal, 1/12) - 1;
+    addLog(`Iniciando processamento de ${pendingItems.length} arquivos...`);
 
-    for (let year = 0; year <= years; year++) {
-      projection.push({
-        year: new Date().getFullYear() + year,
-        value: Math.round(currentBalance),
-        invested: Math.round(totalInvested)
-      });
+    for (const item of pendingItems) {
+        try {
+            // 1. Upload to Storage
+            updateQueueItem(item.id, { status: 'uploading', progress: 0 });
+            addLog(`[${item.file.name}] Iniciando upload...`);
+            
+            const uploadResult = await uploadStatement(item.file, session.user.id, (percent) => {
+                updateQueueItem(item.id, { progress: percent });
+            });
 
-      // Advance one year (12 months)
-      for (let m = 0; m < 12; m++) {
-        currentBalance = currentBalance * (1 + monthlyRate) + monthlyContribution;
-        totalInvested += monthlyContribution;
-      }
+            if (!uploadResult.success) throw new Error(uploadResult.error || "Falha no upload");
+
+            // 2. Extract Text
+            updateQueueItem(item.id, { status: 'extracting' });
+            addLog(`[${item.file.name}] Lendo conteúdo...`);
+            const extractedText = await parseFileContent(item.file);
+            
+            if (!extractedText || extractedText.trim().length === 0) {
+                throw new Error("Texto ilegível ou arquivo vazio.");
+            }
+
+            // 3. AI Processing
+            updateQueueItem(item.id, { status: 'processing_ai' });
+            addLog(`[${item.file.name}] Enviando para Inteligência Artificial...`);
+            const extractedData = await extractFinancialData(extractedText);
+
+            // 4. Auto-Client Detection & Logic
+            let targetClientId = data.selectedClientId;
+            let targetClientName = extractedData.detectedClientName;
+
+            // Se detectou nome, tenta achar ou criar
+            if (targetClientName) {
+                // Refresh clients list first to ensure we have latest data
+                const currentClients = await fetchClients(session.user.id);
+                const existing = currentClients.find(c => c.name.toLowerCase() === targetClientName?.toLowerCase());
+
+                if (existing) {
+                    targetClientId = existing.id;
+                    addLog(`[${item.file.name}] Vinculado ao cliente existente: ${existing.name}`);
+                } else {
+                    addLog(`[${item.file.name}] Criando novo cliente: ${targetClientName}`);
+                    const newClient = await createClient(session.user.id, targetClientName);
+                    if (newClient) {
+                        targetClientId = newClient.id;
+                        // Update local clients state immediately
+                        setData(prev => ({ ...prev, clients: [...prev.clients, newClient] }));
+                    }
+                }
+            }
+
+            if (!targetClientId) {
+                throw new Error("Não foi possível identificar o cliente. Selecione um manualmente antes de processar.");
+            }
+
+            // 5. Save Data
+            updateQueueItem(item.id, { status: 'saving' });
+            const saveData = {
+                personalData: { ...data.personalData, ...extractedData.personalData },
+                transactions: extractedData.transactions || [],
+                assets: extractedData.assets || [],
+            };
+
+            const saveResult = await saveFinancialData(session.user.id, targetClientId, saveData);
+
+            if (!saveResult.success) throw new Error(saveResult.error?.message || "Erro ao salvar no banco");
+
+            // SUCCESS
+            updateQueueItem(item.id, { status: 'completed', resultMessage: `Vinculado a ${targetClientName || 'Cliente Selecionado'}` });
+            addLog(`[${item.file.name}] SUCESSO!`);
+
+            // Se for o último arquivo e tivermos um cliente alvo, seleciona ele
+            if (item.id === pendingItems[pendingItems.length - 1].id) {
+                 handleSelectClient(targetClientId);
+            }
+
+        } catch (error: any) {
+            console.error(error);
+            updateQueueItem(item.id, { status: 'error', error: error.message });
+            addLog(`[${item.file.name}] ERRO: ${error.message}`);
+        }
     }
-    return projection;
+
+    setIsProcessingQueue(false);
+    setSuccessMessage("Fila processada! Verifique o status de cada arquivo.");
+    setShowSuccessAlert(true);
   };
 
   // --- RENDERERS ---
@@ -628,7 +601,7 @@ export default function App() {
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="p-6 border-b flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-4">
-                <h3 className="text-lg font-bold text-gray-800">Transações Realizadas</h3>
+                <h3 className="text-lg font-bold text-gray-800">Movimentações</h3>
                 <span className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
                     {filteredTransactions.length} registros
                 </span>
@@ -979,15 +952,15 @@ export default function App() {
     const isApiConfigured = typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__ && __GEMINI_API_KEY__.length > 0;
     
     return (
-      <div className="max-w-3xl mx-auto space-y-6 pb-20">
+      <div className="max-w-4xl mx-auto space-y-6 pb-20">
         <div className="text-center">
-          <h2 className="text-2xl font-bold">11. Upload Inteligente</h2>
-          <p className="text-gray-500">Carregue extratos bancários (PDF) ou planilhas para análise automática.</p>
+          <h2 className="text-2xl font-bold">11. Upload Inteligente de Arquivos</h2>
+          <p className="text-gray-500">Carregue múltiplos extratos bancários (PDF, CSV) para processamento em fila.</p>
           
           <div className="mt-2 flex justify-center gap-2">
             {!data.selectedClientId && (
                 <div className="text-amber-600 text-xs bg-amber-50 inline-block px-3 py-1 rounded-full border border-amber-200">
-                    ⚠️ Nenhum cliente selecionado
+                    ⚠️ Nenhum cliente selecionado (Será detectado automaticamente)
                 </div>
             )}
             
@@ -997,33 +970,90 @@ export default function App() {
           </div>
         </div>
 
-        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".pdf,.csv,.ofx,.txt" />
+        <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".pdf,.csv,.ofx,.txt" multiple />
 
-        <div onClick={triggerFileInput} className={`bg-white p-8 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-blue-50 transition-colors ${uploadStatus === 'error' ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}>
-            {uploadStatus === 'idle' && <><UploadCloud className="w-10 h-10 text-gray-400 mb-2" /><p>Clique para selecionar arquivo</p></>}
-            {uploadStatus === 'uploading' && <><Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-2" /><p>Enviando {uploadProgress}%</p></>}
-            {uploadStatus === 'extracting' && <><FileText className="w-10 h-10 text-blue-500 animate-pulse mb-2" /><p>Lendo arquivo...</p></>}
-            {uploadStatus === 'completed' && <><CheckCircle2 className="w-10 h-10 text-green-500 mb-2" /><p className="font-bold">{uploadedFile?.name}</p><p className="text-sm text-green-600">Pronto para processar</p></>}
-            {uploadStatus === 'error' && <><AlertCircle className="w-10 h-10 text-red-500 mb-2" /><p>Erro no upload</p></>}
+        <div onClick={triggerFileInput} className={`bg-white p-8 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-blue-50 transition-colors ${isProcessingQueue ? 'opacity-50 cursor-not-allowed' : ''}`}>
+            <UploadCloud className="w-10 h-10 text-gray-400 mb-2" />
+            <p className="font-bold text-gray-700">Clique para adicionar arquivos à fila</p>
+            <p className="text-sm text-gray-500">Suporta múltiplos PDFs e CSVs</p>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border">
-            <textarea value={inputText} onChange={e => setInputText(e.target.value)} className="w-full h-32 text-xs font-mono bg-gray-50 p-2 rounded resize-none outline-none" placeholder="Conteúdo do arquivo..." />
-            <div className="mt-4 flex justify-end">
-                <button 
-                  onClick={handleProcess} 
-                  disabled={isProcessing || uploadStatus !== 'completed'}
-                  className={`px-6 py-2 rounded-lg font-bold text-white flex items-center gap-2 ${isProcessing || uploadStatus !== 'completed' ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}
-                >
-                    {isProcessing ? <Loader2 className="animate-spin w-4 h-4" /> : <TrendingUp className="w-4 h-4" />} 
-                    {isProcessing ? 'Extrair Dados' : 'Extrair Dados'}
-                </button>
+        {/* FILE QUEUE LIST */}
+        {fileQueue.length > 0 && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
+                    <h3 className="font-bold text-gray-700">Fila de Processamento ({fileQueue.length})</h3>
+                    {isProcessingQueue ? (
+                        <span className="text-xs text-blue-600 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin"/> Processando...</span>
+                    ) : (
+                        <button onClick={() => setFileQueue([])} className="text-xs text-red-500 hover:text-red-700">Limpar tudo</button>
+                    )}
+                </div>
+                <div className="divide-y">
+                    {fileQueue.map((item) => (
+                        <div key={item.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                <div className={`p-2 rounded-lg ${item.status === 'error' ? 'bg-red-100 text-red-600' : item.status === 'completed' ? 'bg-green-100 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
+                                    <FileText className="w-5 h-5" />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="text-sm font-medium text-gray-900 truncate">{item.file.name}</p>
+                                    <p className="text-xs text-gray-500">
+                                        {formatFileSize(item.file.size)} • 
+                                        <span className={`ml-1 ${item.status === 'error' ? 'text-red-500' : 'text-blue-600'}`}>
+                                            {item.status === 'queued' && 'Aguardando'}
+                                            {item.status === 'uploading' && `Enviando (${item.progress}%)`}
+                                            {item.status === 'extracting' && 'Lendo texto...'}
+                                            {item.status === 'processing_ai' && 'Analisando com IA...'}
+                                            {item.status === 'saving' && 'Salvando...'}
+                                            {item.status === 'completed' && 'Concluído'}
+                                            {item.status === 'error' && 'Falha'}
+                                        </span>
+                                    </p>
+                                    {item.resultMessage && <p className="text-xs text-green-600 italic">{item.resultMessage}</p>}
+                                    {item.error && <p className="text-xs text-red-500 italic truncate max-w-xs" title={item.error}>{item.error}</p>}
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                                {item.status === 'queued' && (
+                                    <button onClick={() => removeFileFromQueue(item.id)} className="p-1 text-gray-400 hover:text-red-500">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                )}
+                                {(item.status === 'uploading' || item.status === 'extracting' || item.status === 'processing_ai' || item.status === 'saving') && (
+                                    <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                                )}
+                                {item.status === 'completed' && (
+                                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                )}
+                                {item.status === 'error' && (
+                                    <AlertCircle className="w-5 h-5 text-red-500" />
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                
+                <div className="p-4 bg-gray-50 border-t flex justify-end">
+                     <button 
+                        onClick={processQueue}
+                        disabled={isProcessingQueue || fileQueue.every(i => i.status === 'completed')}
+                        className={`px-6 py-2 rounded-lg font-bold text-white flex items-center gap-2 ${isProcessingQueue || fileQueue.every(i => i.status === 'completed') ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}
+                     >
+                        {isProcessingQueue ? <Loader2 className="animate-spin w-4 h-4" /> : <TrendingUp className="w-4 h-4" />} 
+                        {isProcessingQueue ? 'Processando Fila...' : 'Processar Todos'}
+                     </button>
+                </div>
             </div>
-        </div>
+        )}
         
         {processingLog.length > 0 && (
-            <div className="bg-gray-900 text-green-400 p-4 rounded-xl font-mono text-xs h-32 overflow-y-auto">
-                {processingLog.map((log, i) => <div key={i} className="mb-1">{log}</div>)}
+            <div className="mt-6">
+                <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Log de Atividades</h4>
+                <div className="bg-gray-900 text-green-400 p-4 rounded-xl font-mono text-xs h-40 overflow-y-auto">
+                    {processingLog.map((log, i) => <div key={i} className="mb-1 border-b border-gray-800 pb-1 last:border-0">{log}</div>)}
+                </div>
             </div>
         )}
       </div>
@@ -1033,7 +1063,7 @@ export default function App() {
   const TABS = [
     { id: 0, title: '1. Resumo Pessoal', icon: Activity, render: renderSummary },
     { id: 1, title: '2. Orçamento', icon: Calculator, render: renderBudget },
-    { id: 2, title: '3. Realizado', icon: FileText, render: renderRealized },
+    { id: 2, title: '3. Movimentações', icon: FileText, render: renderRealized },
     { id: 3, title: '4. Balanço', icon: Layers, render: renderSimulationSummary }, // Reutilizando para exemplo, mas idealmente teria seu proprio
     { id: 4, title: '5. Investimentos', icon: TrendingUp, render: renderInvestments },
     { id: 5, title: '6. Resumo Sim.', icon: BarChart3, render: renderSimulationSummary },
@@ -1089,11 +1119,13 @@ export default function App() {
         <header className="flex justify-between items-center mb-8">
           <div>
             <h2 className="text-2xl font-bold text-gray-800">{TABS[activeTab].title}</h2>
-            <p className="text-sm text-gray-500 mt-1">
-                {data.selectedClientId 
-                  ? `Cliente Selecionado: ${data.personalData.name}` 
-                  : 'Selecione um cliente na aba 12 ou faça upload.'}
-            </p>
+            {activeTab !== 2 && (
+                <p className="text-sm text-gray-500 mt-1">
+                    {data.selectedClientId 
+                      ? `Cliente Selecionado: ${data.personalData.name}` 
+                      : 'Selecione um cliente na aba 12 ou faça upload.'}
+                </p>
+            )}
           </div>
           <div className="flex items-center gap-4">
              {/* CLIENT SELECTOR HEADER */}
