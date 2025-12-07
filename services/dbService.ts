@@ -1,6 +1,6 @@
 
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { AppState, Client, CategoryItem, CategoryGroup } from '../types';
+import { AppState, Client } from '../types';
 
 // --- GESTÃO DE CLIENTES (CONSULTOR) ---
 
@@ -37,65 +37,6 @@ export const createClient = async (consultantId: string, name: string): Promise<
 export const deleteClient = async (clientId: string) => {
     const { error } = await supabase.from('clients').delete().eq('id', clientId);
     if (error) throw error;
-};
-
-// --- GESTÃO DE CATEGORIAS (CONSULTOR) ---
-
-export const fetchCustomCategories = async (userId: string): Promise<CategoryItem[]> => {
-    if (!isSupabaseConfigured()) return [];
-
-    const { data, error } = await supabase
-        .from('categories')
-        .select('*')
-        .eq('user_id', userId);
-
-    if (error) {
-        console.error('Erro ao buscar categorias:', error);
-        return [];
-    }
-
-    // Mapeia para o formato interno CategoryItem
-    return (data || []).map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        group: item.group as CategoryGroup,
-        isCustom: true
-    }));
-};
-
-export const addCustomCategory = async (userId: string, name: string, group: string): Promise<CategoryItem | null> => {
-    if (!isSupabaseConfigured()) return null;
-
-    const { data, error } = await supabase
-        .from('categories')
-        .insert({ 
-            user_id: userId,
-            name: name, 
-            group: group 
-        })
-        .select()
-        .single();
-
-    if (error) {
-        console.error('Erro ao adicionar categoria:', error);
-        return null;
-    }
-
-    return {
-        id: data.id,
-        name: data.name,
-        group: data.group as CategoryGroup,
-        isCustom: true
-    };
-};
-
-export const deleteCustomCategory = async (categoryId: string) => {
-    if (!isSupabaseConfigured()) return;
-    const { error } = await supabase.from('categories').delete().eq('id', categoryId);
-    if (error) {
-        console.error('Erro ao deletar categoria:', error);
-        throw error;
-    }
 };
 
 // --- DADOS FINANCEIROS ---

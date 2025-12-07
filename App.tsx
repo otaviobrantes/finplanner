@@ -7,7 +7,7 @@ import {
   ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
-import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchCustomCategories, addCustomCategory, deleteCustomCategory } from './services/dbService';
+import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
 import { supabase } from './services/supabaseClient';
@@ -33,7 +33,7 @@ interface QueueItem {
 // Helper: Gera lista padrão baseada no Enum original
 const generateDefaultCategories = (): CategoryItem[] => {
     return Object.values(TransactionCategory).map(cat => ({
-        id: crypto.randomUUID(), // IDs temporários para a lista default
+        id: crypto.randomUUID(),
         name: cat,
         group: getCategoryGroup(cat),
         isCustom: false
@@ -210,26 +210,24 @@ export default function App() {
   // Estado para edição de categorias (Página 10)
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryGroup, setNewCategoryGroup] = useState<CategoryGroup>("Essencial");
-  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
 
-  // Load Categories Function
-  const loadCategories = async (userId: string) => {
-      setIsLoadingCategories(true);
-      try {
-          const customCategories = await fetchCustomCategories(userId);
-          const defaultCategories = generateDefaultCategories();
-          
-          // Combina as categorias padrão com as personalizadas do banco
-          setData(prev => ({ 
-              ...prev, 
-              categories: [...defaultCategories, ...customCategories] 
-          }));
-      } catch (error) {
-          console.error("Erro ao carregar categorias:", error);
-      } finally {
-          setIsLoadingCategories(false);
-      }
-  };
+  // Load Categories on Startup
+  useEffect(() => {
+    // 1. Tenta carregar do LocalStorage
+    const savedCats = localStorage.getItem('finplanner_categories');
+    if (savedCats) {
+        try {
+            const parsed = JSON.parse(savedCats);
+            setData(prev => ({ ...prev, categories: parsed }));
+        } catch (e) {
+            console.error("Erro ao carregar categorias salvas, resetando...", e);
+            setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
+        }
+    } else {
+        // 2. Se não existir, carrega o Default do Enum
+        setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
+    }
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -240,11 +238,7 @@ export default function App() {
           setMustChangePassword(true);
         } else {
           loadClients(session.user.id);
-          loadCategories(session.user.id);
         }
-      } else {
-          // Se não estiver logado, carrega apenas os defaults
-          setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
       }
     });
 
@@ -256,7 +250,6 @@ export default function App() {
           } else {
             setMustChangePassword(false);
             loadClients(session.user.id);
-            loadCategories(session.user.id);
           }
       } else {
           setData(INITIAL_STATE);
@@ -337,38 +330,39 @@ export default function App() {
 
   // --- CATEGORY MANAGEMENT HANDLERS ---
   
-  const handleAddCategory = async () => {
-      if (!newCategoryName.trim() || !session?.user) return;
+  const handleAddCategory = () => {
+      if (!newCategoryName.trim()) return;
       
-      setIsLoadingCategories(true);
-      const newCat = await addCustomCategory(session.user.id, newCategoryName.trim(), newCategoryGroup);
+      const newItem: CategoryItem = {
+          id: crypto.randomUUID(),
+          name: newCategoryName.trim(),
+          group: newCategoryGroup,
+          isCustom: true
+      };
       
-      if (newCat) {
-          setData(prev => ({ ...prev, categories: [...prev.categories, newCat] }));
-          setNewCategoryName("");
-          setSuccessMessage("Categoria adicionada ao banco de dados!");
-          setShowSuccessAlert(true);
-      } else {
-          alert("Erro ao adicionar categoria. Verifique se o nome já existe.");
-      }
-      setIsLoadingCategories(false);
+      const updatedCategories = [...data.categories, newItem];
+      
+      setData(prev => ({ ...prev, categories: updatedCategories }));
+      localStorage.setItem('finplanner_categories', JSON.stringify(updatedCategories));
+      
+      setNewCategoryName("");
+      setSuccessMessage("Categoria adicionada!");
+      setShowSuccessAlert(true);
   };
 
-  const handleDeleteCategory = async (id: string) => {
-      if (!confirm("Tem certeza que deseja remover esta categoria permanentemente?")) return;
+  const handleDeleteCategory = (id: string) => {
+      if (!confirm("Tem certeza que deseja remover esta categoria?")) return;
       
-      try {
-          await deleteCustomCategory(id);
-          setData(prev => ({ ...prev, categories: prev.categories.filter(c => c.id !== id) }));
-      } catch (error) {
-          alert("Erro ao remover categoria.");
-      }
+      const updatedCategories = data.categories.filter(c => c.id !== id);
+      setData(prev => ({ ...prev, categories: updatedCategories }));
+      localStorage.setItem('finplanner_categories', JSON.stringify(updatedCategories));
   };
 
   const handleRestoreCategories = () => {
-      alert("Para restaurar o padrão, remova as categorias personalizadas individualmente.");
-      // Com DB, não faz sentido "resetar" tudo de uma vez sem apagar do banco, 
-      // o que seria perigoso. Melhor instruir o usuário.
+      if (!confirm("Isso irá apagar todas as categorias personalizadas e restaurar o padrão. Continuar?")) return;
+      const defaults = generateDefaultCategories();
+      setData(prev => ({ ...prev, categories: defaults }));
+      localStorage.setItem('finplanner_categories', JSON.stringify(defaults));
   };
 
   const handleLogout = async () => {
@@ -1146,7 +1140,7 @@ export default function App() {
                   <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
                      <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
                   </h3>
-                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações agora são salvas permanentemente no sistema.</p>
+                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações são salvas automaticamente no seu navegador.</p>
                   
                   <div className="flex gap-2 items-end">
                       <div className="flex-1">
@@ -1154,10 +1148,9 @@ export default function App() {
                           <input 
                               type="text" 
                               placeholder="Ex: Natação, Curso de Python..." 
-                              className="w-full border border-slate-300 p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-100 text-slate-900 placeholder-slate-400"
+                              className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                               value={newCategoryName}
                               onChange={(e) => setNewCategoryName(e.target.value)}
-                              disabled={isLoadingCategories}
                           />
                       </div>
                       <div className="w-40">
@@ -1166,20 +1159,26 @@ export default function App() {
                              className="w-full border p-2 rounded-lg text-sm bg-white"
                              value={newCategoryGroup}
                              onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
-                             disabled={isLoadingCategories}
                           >
                              {groupOrder.map(g => <option key={g} value={g}>{g}</option>)}
                           </select>
                       </div>
                       <button 
                          onClick={handleAddCategory}
-                         disabled={isLoadingCategories}
-                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors disabled:bg-gray-300"
+                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors"
                          title="Adicionar"
                       >
-                         {isLoadingCategories ? <Loader2 className="w-5 h-5 animate-spin"/> : <Plus className="w-5 h-5" />}
+                         <Plus className="w-5 h-5" />
                       </button>
                   </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                 <button 
+                    onClick={handleRestoreCategories}
+                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors"
+                 >
+                    <RotateCcw className="w-3 h-3" /> Restaurar Padrão
+                 </button>
               </div>
           </div>
 
@@ -1196,17 +1195,15 @@ export default function App() {
                          </div>
                          <div className="p-4 flex flex-wrap gap-2">
                              {cats.map(cat => (
-                                 <div key={cat.id} className={`group flex items-center gap-1 border rounded px-2 py-1 text-xs hover:border-blue-300 transition-colors ${cat.isCustom ? 'bg-blue-50 text-blue-800 border-blue-100' : 'bg-white text-gray-700 border-gray-200'}`}>
+                                 <div key={cat.id} className="group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 hover:border-blue-300 transition-colors">
                                      <span>{cat.name}</span>
-                                     {cat.isCustom && (
-                                         <button 
-                                            onClick={() => handleDeleteCategory(cat.id)}
-                                            className="text-blue-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                            title="Remover"
-                                         >
-                                             <X className="w-3 h-3" />
-                                         </button>
-                                     )}
+                                     <button 
+                                        onClick={() => handleDeleteCategory(cat.id)}
+                                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        title="Remover"
+                                     >
+                                         <X className="w-3 h-3" />
+                                     </button>
                                  </div>
                              ))}
                          </div>
