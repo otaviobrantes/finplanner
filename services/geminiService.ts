@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
-import { AppState, TransactionCategory } from "../types";
+import { AppState, TransactionCategory, CategoryItem } from "../types";
 
 // Declaração da constante global injetada pelo Vite (vite.config.ts)
 declare const __GEMINI_API_KEY__: string | undefined;
@@ -7,7 +8,6 @@ declare const __GEMINI_API_KEY__: string | undefined;
 // Helper para ler variáveis de ambiente de forma segura
 const getApiKey = (): string => {
   // 1. Prioridade: Constante injetada no Build (Hardcoded pelo Vite)
-  // Isso resolve o problema do Vercel não expor variáveis em tempo de execução
   if (typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__) {
     return __GEMINI_API_KEY__;
   }
@@ -28,7 +28,9 @@ const getApiKey = (): string => {
 };
 
 export const extractFinancialData = async (
-  fileContent: string
+  fileContent: string,
+  userContext?: string,
+  customCategories?: CategoryItem[]
 ): Promise<Partial<AppState> & { detectedClientName?: string }> => {
   const model = "gemini-2.5-flash";
 
@@ -36,7 +38,6 @@ export const extractFinancialData = async (
   const rawApiKey = getApiKey();
   const apiKey = rawApiKey ? rawApiKey.trim() : "";
   
-  // Log discreto para debug (mostra apenas os 4 primeiros caracteres)
   console.log(`[FinPlanner] API Key carregada: ${apiKey ? apiKey.substring(0, 4) + '...' : 'NÃO ENCONTRADA'}`);
   
   if (!apiKey) {
@@ -45,7 +46,19 @@ export const extractFinancialData = async (
   
   const ai = new GoogleGenAI({ apiKey: apiKey });
 
-  const categoriesList = Object.values(TransactionCategory).join(', ');
+  // Constrói a lista de categorias para o prompt.
+  // Se existirem categorias customizadas, usa elas. Caso contrário, fallback para o Enum padrão.
+  let categoriesString = "";
+  let categoriesListForSchema: string[] = [];
+
+  if (customCategories && customCategories.length > 0) {
+      // Formato: "Nome da Categoria (Grupo)" para dar contexto à IA
+      categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
+      categoriesListForSchema = customCategories.map(c => c.name);
+  } else {
+      categoriesString = Object.values(TransactionCategory).join(', ');
+      categoriesListForSchema = Object.values(TransactionCategory);
+  }
 
   const prompt = `
     You are a specialized High-End Financial Auditor AI (FinPlanner).
@@ -57,36 +70,30 @@ export const extractFinancialData = async (
 
     *** CRITICAL: CATEGORIZE TRANSACTIONS ***
     You must categorize every transaction into one of the EXACT categories listed below.
+    Use the provided "Group" context to help understand the nature of the expense.
     
     --- INTELLIGENT CATEGORIZATION LOGIC ---
-    1. **PIX / Transfers**: If it's a PIX to a person (e.g., "PIX ENVIADO MARIA..."):
-       - If explicitly mentioned "Faxina", "Limpeza" -> '${TransactionCategory.HOUSEKEEPER_WEEKEND}'
-       - If mentioned "Aluguel" -> '${TransactionCategory.RENT}'
-       - If mentioned "Condominio" -> '${TransactionCategory.CONDO_FEE}'
-       - If no context is provided, but it looks like a service provider, try to map to 'Outros' or a specific service.
-       - If ambiguous, default to '${TransactionCategory.OTHERS}' (Diversos).
+    1. **PIX / Transfers**: If it's a PIX to a person:
+       - If explicitly mentioned "Faxina", "Limpeza" -> 'Folguista' or 'Mensalista'
+       - If mentioned "Aluguel" -> 'Aluguel'
+       - If mentioned "Condominio" -> 'Condomínio'
+       - If ambiguous, map to 'Diversos' or closest match.
 
-    2. **Keywords Mapping (Examples)**:
-       - Uber, Taxi, 99, Cabify -> '${TransactionCategory.RIDE_APP}'
-       - Posto, Gasolina, Ipiranga, Shell, Petrobras -> '${TransactionCategory.FUEL}'
-       - Netflix, Spotify, Amazon Prime, Apple, Disney+, HBO -> '${TransactionCategory.STREAMING}'
-       - Drogasil, Raia, Drogaria, Pacheco, Venancio -> '${TransactionCategory.PHARMACY}'
-       - Pão de Açúcar, Carrefour, Zaffari, Mundial, Hortifruti -> '${TransactionCategory.SUPERMARKET}'
-       - Padaria, Confeitaria, Boteco -> '${TransactionCategory.BAKERY}'
-       - Zara, Renner, Nike, Adidas, Riachuelo, Shein -> '${TransactionCategory.CLOTHES_ADULT}'
-       - Hospital, Laboratório, Exame, Consulta, Dr., Dra. -> '${TransactionCategory.HOSPITAL}'
-       - Condominio, Cotas, Adm -> '${TransactionCategory.CONDO_FEE}'
-       - Aluguel, Imobiliária, QuintoAndar -> '${TransactionCategory.RENT}'
-       - Salário, Proventos, Pagamento, Remuneração -> '${TransactionCategory.INCOME_SALARY}'
-       - Rendimentos, Dividendos, JCP -> '${TransactionCategory.INCOME_DIVIDENDS}'
-       
-    3. **General Rules**:
+    2. **Context Rules**:
        - Negative values are expenses. Positive values are income.
        - Ignore balance rows (Saldos).
        - Extract the date in YYYY-MM-DD format.
 
-    --- VALID CATEGORIES ---
-    ${categoriesList}
+    ${userContext ? `
+    *** USER CONTEXT INSTRUCTIONS (HIGH PRIORITY) ***
+    The user has provided specific context for this extraction. 
+    Follow these instructions strictly, overriding general rules if necessary:
+    "${userContext}"
+    ` : ''}
+
+    --- VALID CATEGORIES LIST (Name & Group) ---
+    You must ONLY use the exact names from this list:
+    ${categoriesString}
 
     --- INPUT TEXT ---
     ${fileContent}
@@ -161,8 +168,8 @@ export const extractFinancialData = async (
                 date: { type: Type.STRING },
                 description: { type: Type.STRING },
                 amount: { type: Type.NUMBER },
-                category: { type: Type.STRING, enum: Object.values(TransactionCategory) },
-                type: { type: Type.STRING },
+                category: { type: Type.STRING, enum: categoriesListForSchema },
+                type: { type: Type.STRING }, // AI fills this but we usually recalc based on category
                 institution: { type: Type.STRING }
               }
             }

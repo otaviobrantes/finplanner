@@ -1,15 +1,17 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
-  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X
+  UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
+  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
-import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
+import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchCustomCategories, addCustomCategory, deleteCustomCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
 import { supabase } from './services/supabaseClient';
-import { AppState, INITIAL_STATE, TransactionCategory, CategoryGroup, Client } from './types';
+import { AppState, INITIAL_STATE, TransactionCategory, CategoryGroup, Client, CategoryItem } from './types';
 import { PatrimonyChart, AllocationChart, ExpensesBarChart, ScenarioChart } from './components/FinancialCharts';
 import { Auth } from './components/Auth';
 
@@ -28,19 +30,48 @@ interface QueueItem {
   resultMessage?: string;
 }
 
-// Helper to determine group from category (Logic duplicated from GeminiService for consistency)
+// Helper: Gera lista padrão baseada no Enum original
+const generateDefaultCategories = (): CategoryItem[] => {
+    return Object.values(TransactionCategory).map(cat => ({
+        id: crypto.randomUUID(), // IDs temporários para a lista default
+        name: cat,
+        group: getCategoryGroup(cat),
+        isCustom: false
+    }));
+};
+
+// Helper to determine group from category (Legacy Helper + Fallback)
 const getCategoryGroup = (cat: string): CategoryGroup => {
-  if (cat.includes('Transporte') || cat.includes('Carro') || cat.includes('Uber') || cat.includes('Combustível')) return 'Transporte';
-  if (cat.includes('Restaurante') || cat.includes('Viagem') || cat.includes('Lazer') || cat.includes('Social') || cat.includes('Netflix')) return 'Social';
-  if (cat.includes('Saúde') || cat.includes('Médico') || cat.includes('Hospital') || cat.includes('Dentista') || cat.includes('Farmácia')) return 'Saúde';
-  if (cat.includes('Salário') || cat.includes('Receita') || cat.includes('Dividendo')) return 'Receitas';
-  if (cat.includes('Presente') || cat.includes('Festas')) return 'Presentes';
-  if (cat.includes('Seguro') || cat.includes('Juros') || cat.includes('Doações') || cat.includes('Planejador')) return 'Financeiro';
-  if (cat.includes('Consultora') || cat.includes('Arrumação') || cat.includes('Costureira')) return 'Extra';
-  if (cat.includes('Entidade')) return 'Profissional';
-  if (cat.includes('Diversos') || cat.includes('Outros')) return 'Outros';
+  const lowerCat = cat.toLowerCase();
+
+  // Receitas (Prioridade alta para evitar conflito com Aluguel despesa)
+  if (lowerCat.includes('salário') || lowerCat.includes('receita') || lowerCat.includes('dividendo') || lowerCat.includes('aluguéis') || lowerCat.includes('entradas') || lowerCat.includes('restituição')) return 'Receitas';
+
+  // Transporte
+  if (lowerCat.includes('transporte') || lowerCat.includes('carro') || lowerCat.includes('uber') || lowerCat.includes('taxi') || lowerCat.includes('99') || lowerCat.includes('combustível') || lowerCat.includes('ipva') || lowerCat.includes('estacionamento') || lowerCat.includes('multa')) return 'Transporte';
   
-  // Default fallback (apenas se for algo realmente essencial como mercado, aluguel, etc)
+  // Social
+  if (lowerCat.includes('restaurante') || lowerCat.includes('viagem') || lowerCat.includes('lazer') || lowerCat.includes('social') || lowerCat.includes('netflix') || lowerCat.includes('spotify') || lowerCat.includes('cinema') || lowerCat.includes('teatro') || lowerCat.includes('assinatura') || lowerCat.includes('roupa') || lowerCat.includes('calçado')) return 'Social';
+  
+  // Saúde
+  if (lowerCat.includes('saúde') || lowerCat.includes('médico') || lowerCat.includes('hospital') || lowerCat.includes('dentista') || lowerCat.includes('farmácia') || lowerCat.includes('drogaria') || lowerCat.includes('academia') || lowerCat.includes('vacina') || lowerCat.includes('lente') || lowerCat.includes('óculos')) return 'Saúde';
+  
+  // Presentes
+  if (lowerCat.includes('presente') || lowerCat.includes('festa')) return 'Presentes';
+  
+  // Financeiro
+  if (lowerCat.includes('seguro') || lowerCat.includes('juros') || lowerCat.includes('doaç') || lowerCat.includes('planejador') || lowerCat.includes('cartão') || lowerCat.includes('iof') || lowerCat.includes('taxa')) return 'Financeiro';
+  
+  // Extra
+  if (lowerCat.includes('consultora') || lowerCat.includes('arrumação') || lowerCat.includes('costureira')) return 'Extra';
+  
+  // Profissional
+  if (lowerCat.includes('entidade') || lowerCat.includes('oab') || lowerCat.includes('crm')) return 'Profissional';
+  
+  // Diversos / Outros
+  if (lowerCat.includes('diversos') || lowerCat.includes('outros')) return 'Outros';
+  
+  // Essencial (Fallback amplo)
   return 'Essencial';
 };
 
@@ -145,9 +176,12 @@ const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(true);
-  const [activeTab, setActiveTab] = useState(11); // Começa na Tela de Clientes (Pag 12)
+  const [activeTab, setActiveTab] = useState(11);
   const [data, setData] = useState<AppState>(INITIAL_STATE);
   
+  // Sidebar State
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
+
   // Processing States
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [processingLog, setProcessingLog] = useState<string[]>([]);
@@ -156,6 +190,9 @@ export default function App() {
   // Multi-File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileQueue, setFileQueue] = useState<QueueItem[]>([]);
+  
+  // Custom Context State
+  const [customContext, setCustomContext] = useState("");
   
   // Success Alert State
   const [showSuccessAlert, setShowSuccessAlert] = useState(false);
@@ -170,6 +207,30 @@ export default function App() {
   // Force Password Change State
   const [mustChangePassword, setMustChangePassword] = useState(false);
 
+  // Estado para edição de categorias (Página 10)
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryGroup, setNewCategoryGroup] = useState<CategoryGroup>("Essencial");
+  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
+
+  // Load Categories Function
+  const loadCategories = async (userId: string) => {
+      setIsLoadingCategories(true);
+      try {
+          const customCategories = await fetchCustomCategories(userId);
+          const defaultCategories = generateDefaultCategories();
+          
+          // Combina as categorias padrão com as personalizadas do banco
+          setData(prev => ({ 
+              ...prev, 
+              categories: [...defaultCategories, ...customCategories] 
+          }));
+      } catch (error) {
+          console.error("Erro ao carregar categorias:", error);
+      } finally {
+          setIsLoadingCategories(false);
+      }
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -179,7 +240,11 @@ export default function App() {
           setMustChangePassword(true);
         } else {
           loadClients(session.user.id);
+          loadCategories(session.user.id);
         }
+      } else {
+          // Se não estiver logado, carrega apenas os defaults
+          setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
       }
     });
 
@@ -191,6 +256,7 @@ export default function App() {
           } else {
             setMustChangePassword(false);
             loadClients(session.user.id);
+            loadCategories(session.user.id);
           }
       } else {
           setData(INITIAL_STATE);
@@ -220,7 +286,7 @@ export default function App() {
               personalData: { ...prev.personalData, ...clientData.personalData },
               lastUpdated: new Date().toISOString()
           }));
-          setActiveTab(0); // Vai para o Dashboard do cliente
+          setActiveTab(0);
       }
       setIsLoadingData(false);
   };
@@ -250,9 +316,11 @@ export default function App() {
   };
 
   const handleCategoryChange = async (transactionId: string, newCategory: string) => {
-      const newType = getCategoryGroup(newCategory);
+      // Procura a categoria na lista dinâmica para pegar o grupo correto
+      const matchedCat = data.categories.find(c => c.name === newCategory);
+      const newType = matchedCat ? matchedCat.group : getCategoryGroup(newCategory);
 
-      // 1. Otimistic Update (Atualiza UI instantaneamente)
+      // Otimistic Update
       setData(prev => ({
           ...prev,
           transactions: prev.transactions.map(t => 
@@ -260,12 +328,47 @@ export default function App() {
           )
       }));
 
-      // 2. Atualiza no Banco
       try {
           await updateTransactionCategory(transactionId, newCategory, newType);
       } catch (error) {
           alert("Erro ao atualizar categoria no banco de dados.");
       }
+  };
+
+  // --- CATEGORY MANAGEMENT HANDLERS ---
+  
+  const handleAddCategory = async () => {
+      if (!newCategoryName.trim() || !session?.user) return;
+      
+      setIsLoadingCategories(true);
+      const newCat = await addCustomCategory(session.user.id, newCategoryName.trim(), newCategoryGroup);
+      
+      if (newCat) {
+          setData(prev => ({ ...prev, categories: [...prev.categories, newCat] }));
+          setNewCategoryName("");
+          setSuccessMessage("Categoria adicionada ao banco de dados!");
+          setShowSuccessAlert(true);
+      } else {
+          alert("Erro ao adicionar categoria. Verifique se o nome já existe.");
+      }
+      setIsLoadingCategories(false);
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+      if (!confirm("Tem certeza que deseja remover esta categoria permanentemente?")) return;
+      
+      try {
+          await deleteCustomCategory(id);
+          setData(prev => ({ ...prev, categories: prev.categories.filter(c => c.id !== id) }));
+      } catch (error) {
+          alert("Erro ao remover categoria.");
+      }
+  };
+
+  const handleRestoreCategories = () => {
+      alert("Para restaurar o padrão, remova as categorias personalizadas individualmente.");
+      // Com DB, não faz sentido "resetar" tudo de uma vez sem apagar do banco, 
+      // o que seria perigoso. Melhor instruir o usuário.
   };
 
   const handleLogout = async () => {
@@ -287,7 +390,6 @@ export default function App() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files || !session?.user) return;
 
-    // Explicitly casting `file` to `File` to fix TypeScript inference issue
     const newFiles: QueueItem[] = Array.from(event.target.files).map((file) => ({
       id: Math.random().toString(36).substring(7),
       file: file as File,
@@ -317,7 +419,6 @@ export default function App() {
     setIsProcessingQueue(true);
     setProcessingLog([]);
 
-    // Filtra apenas itens que ainda não foram completados
     const pendingItems = fileQueue.filter(i => i.status === 'queued' || i.status === 'error');
     
     if (pendingItems.length === 0) {
@@ -327,10 +428,10 @@ export default function App() {
     }
 
     addLog(`Iniciando processamento de ${pendingItems.length} arquivos...`);
+    addLog(`Usando ${data.categories.length} categorias para classificação.`);
 
     for (const item of pendingItems) {
         try {
-            // 1. Upload to Storage
             updateQueueItem(item.id, { status: 'uploading', progress: 0 });
             addLog(`[${item.file.name}] Iniciando upload...`);
             
@@ -340,7 +441,6 @@ export default function App() {
 
             if (!uploadResult.success) throw new Error(uploadResult.error || "Falha no upload");
 
-            // 2. Extract Text
             updateQueueItem(item.id, { status: 'extracting' });
             addLog(`[${item.file.name}] Lendo conteúdo...`);
             const extractedText = await parseFileContent(item.file);
@@ -349,18 +449,16 @@ export default function App() {
                 throw new Error("Texto ilegível ou arquivo vazio.");
             }
 
-            // 3. AI Processing
             updateQueueItem(item.id, { status: 'processing_ai' });
             addLog(`[${item.file.name}] Enviando para Inteligência Artificial...`);
-            const extractedData = await extractFinancialData(extractedText);
+            
+            // PASSANDO AS CATEGORIAS ATUAIS PARA O SERVIÇO
+            const extractedData = await extractFinancialData(extractedText, customContext, data.categories);
 
-            // 4. Auto-Client Detection & Logic
             let targetClientId = data.selectedClientId;
             let targetClientName = extractedData.detectedClientName;
 
-            // Se detectou nome, tenta achar ou criar
             if (targetClientName) {
-                // Refresh clients list first to ensure we have latest data
                 const currentClients = await fetchClients(session.user.id);
                 const existing = currentClients.find(c => c.name.toLowerCase() === targetClientName?.toLowerCase());
 
@@ -372,7 +470,6 @@ export default function App() {
                     const newClient = await createClient(session.user.id, targetClientName);
                     if (newClient) {
                         targetClientId = newClient.id;
-                        // Update local clients state immediately
                         setData(prev => ({ ...prev, clients: [...prev.clients, newClient] }));
                     }
                 }
@@ -382,7 +479,6 @@ export default function App() {
                 throw new Error("Não foi possível identificar o cliente. Selecione um manualmente antes de processar.");
             }
 
-            // 5. Save Data
             updateQueueItem(item.id, { status: 'saving' });
             const saveData = {
                 personalData: { ...data.personalData, ...extractedData.personalData },
@@ -394,11 +490,9 @@ export default function App() {
 
             if (!saveResult.success) throw new Error(saveResult.error?.message || "Erro ao salvar no banco");
 
-            // SUCCESS
             updateQueueItem(item.id, { status: 'completed', resultMessage: `Vinculado a ${targetClientName || 'Cliente Selecionado'}` });
             addLog(`[${item.file.name}] SUCESSO!`);
 
-            // Se for o último arquivo e tivermos um cliente alvo, seleciona ele
             if (item.id === pendingItems[pendingItems.length - 1].id) {
                  handleSelectClient(targetClientId);
             }
@@ -476,23 +570,47 @@ export default function App() {
     <div className="space-y-6 animate-fade-in">
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2 pb-2 border-b">
-           <Users className="w-5 h-5 text-blue-600" /> 1.1 Dados Pessoais e Profissionais
+           <Users className="w-5 h-5 text-blue-600" /> 1.1 Dados Pessoais
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
             <div className="space-y-3">
                 <InfoRow label="Nome" value={data.personalData.name} />
                 <InfoRow label="Nascimento" value={data.personalData.birthDate || '--/--/----'} />
+            </div>
+            <div className="space-y-3">
                 <InfoRow label="Nacionalidade" value={data.personalData.nationality} />
+                <InfoRow label="Estado Civil" value={data.personalData.maritalStatus} />
             </div>
             <div className="space-y-3">
-                <InfoRow label="Profissão" value={data.personalData.profession} />
-                <InfoRow label="Empresa" value={data.personalData.company} />
-            </div>
-            <div className="space-y-3">
-                <InfoRow label="Email" value={data.personalData.email} />
-                <InfoRow label="Cidade" value={data.personalData.address?.neighborhood || '-'} />
+                <InfoRow label="Regime de Bens" value={data.personalData.propertyRegime || '-'} />
             </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                 <MapPin className="w-5 h-5 text-orange-600" /> 1.2 Endereço e Contato
+             </h3>
+             <div className="space-y-2">
+                 <InfoRow label="Logradouro" value={data.personalData.address?.street || '-'} />
+                 <InfoRow label="Bairro/Cidade" value={data.personalData.address?.neighborhood || '-'} />
+                 <InfoRow label="CEP" value={data.personalData.address?.zipCode || '-'} />
+                 <InfoRow label="Email" value={data.personalData.email || '-'} />
+             </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                 <Briefcase className="w-5 h-5 text-indigo-600" /> 1.3 Profissional
+             </h3>
+             <div className="space-y-2">
+                 <InfoRow label="Profissão" value={data.personalData.profession || '-'} />
+                 <InfoRow label="Empresa" value={data.personalData.company || '-'} />
+                 <InfoRow label="Cargo" value={data.personalData.role || '-'} />
+                 <InfoRow label="CNPJ" value={data.personalData.cnpj || '-'} />
+             </div>
+          </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -504,6 +622,8 @@ export default function App() {
                  <InfoRow label="Renda Bruta" value={data.personalData.incomeDetails?.grossAmount?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || 'R$ 0,00'} />
                  <InfoRow label="INSS" value={data.personalData.incomeDetails?.inss?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || 'R$ 0,00'} />
                  <InfoRow label="IRRF" value={data.personalData.incomeDetails?.irrf?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || 'R$ 0,00'} />
+                 <InfoRow label="13º Salário" value={data.personalData.incomeDetails?.thirteenthSalary?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || 'R$ 0,00'} />
+                 <InfoRow label="Aluguéis" value={data.personalData.incomeDetails?.rentIncome?.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) || 'R$ 0,00'} />
              </div>
           </div>
           
@@ -514,9 +634,15 @@ export default function App() {
              {data.personalData.dependents.length > 0 ? (
                  <div className="space-y-2">
                      {data.personalData.dependents.map((dep, idx) => (
-                         <div key={idx} className="bg-gray-50 p-2 rounded text-sm flex justify-between">
-                             <span className="font-medium">{dep.name}</span>
-                             <span className="text-gray-500">{dep.birthDate}</span>
+                         <div key={idx} className="bg-gray-50 p-3 rounded text-sm space-y-1">
+                             <div className="flex justify-between font-bold">
+                                <span>{dep.name}</span>
+                                <span className="text-gray-500">{dep.birthDate}</span>
+                             </div>
+                             <div className="text-xs text-gray-500 flex justify-between">
+                                <span>{dep.occupation || 'Sem ocupação'}</span>
+                                <span>{dep.schoolOrCompany || '-'}</span>
+                             </div>
                          </div>
                      ))}
                  </div>
@@ -529,10 +655,6 @@ export default function App() {
   );
 
   const renderBudget = () => {
-    // Lista completa de grupos para garantir que todas as transações sejam exibidas
-    const allGroups = ['Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
-
-    // Calculando totais para exibir apenas o que tem dados ou mensagem de vazio
     const totalTransactions = data.transactions.length;
     
     if (totalTransactions === 0) {
@@ -545,31 +667,84 @@ export default function App() {
         );
     }
 
+    // Usa 'getCategoryGroup' mas agora considera as categorias customizadas
+    const getGroupForChart = (cat: string) => {
+        const custom = data.categories.find(c => c.name === cat);
+        return custom ? custom.group : getCategoryGroup(cat);
+    };
+
+    const distinctGroups = Array.from(new Set(data.transactions.map(t => getGroupForChart(t.category))));
+    
+    const preferredOrder = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+    
+    const sortedGroups = distinctGroups.sort((a, b) => {
+        const indexA = preferredOrder.indexOf(a as string);
+        const indexB = preferredOrder.indexOf(b as string);
+        return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+    });
+
+    const chartData = sortedGroups.map(group => {
+         const groupTrans = data.transactions.filter(t => getGroupForChart(t.category) === group);
+         
+         const isIncomeGroup = group === 'Receitas';
+         let total = 0;
+         
+         if (isIncomeGroup) {
+              total = groupTrans.reduce((acc, t) => acc + t.amount, 0);
+         } else {
+              const rawSum = groupTrans.reduce((acc, t) => acc + t.amount, 0);
+              total = Math.abs(rawSum);
+         }
+         
+         return { name: group, value: total };
+    }).filter(item => item.value > 0.01);
+
     return (
       <div className="space-y-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 mb-2">Visão Geral do Orçamento</h3>
             <div className="h-64">
-                <ExpensesBarChart transactions={data.transactions} />
+                <ExpensesBarChart data={chartData} />
             </div>
         </div>
         
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 p-6 border-b">Detalhamento por Categoria</h3>
             <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                {allGroups.map(group => {
-                    const groupTrans = data.transactions.filter(t => t.type === group);
-                    const total = groupTrans.reduce((acc, t) => acc + Math.abs(t.amount), 0);
-                    if (total === 0) return null;
+                {sortedGroups.map(group => {
+                    const groupTrans = data.transactions.filter(t => getGroupForChart(t.category) === group);
+                    if (groupTrans.length === 0) return null;
+                    
+                    const isIncomeGroup = group === 'Receitas'; 
+                    let total = 0;
+                    if (isIncomeGroup) {
+                         total = groupTrans.reduce((acc, t) => acc + t.amount, 0);
+                    } else {
+                         const rawSum = groupTrans.reduce((acc, t) => acc + t.amount, 0);
+                         total = Math.abs(rawSum);
+                    }
+
+                    if (total < 0.01) return null;
+
                     return (
-                        <div key={group} className="border rounded-lg p-4">
+                        <div key={group as string} className="border rounded-lg p-4">
                             <div className="flex justify-between items-center mb-2">
-                                <h4 className="font-bold text-gray-700">{group}</h4>
-                                <span className="font-bold text-gray-900">{total.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
+                                <h4 className={`font-bold ${isIncomeGroup ? 'text-green-700' : 'text-gray-700'}`}>{group}</h4>
+                                <span className={`font-bold ${isIncomeGroup ? 'text-green-700' : 'text-gray-900'}`}>{total.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</span>
                             </div>
                             <div className="space-y-1">
-                                {Array.from(new Set(groupTrans.map(t => t.category))).map(cat => {
-                                    const catTotal = groupTrans.filter(t => t.category === cat).reduce((acc, t) => acc + Math.abs(t.amount), 0);
+                                {Array.from(new Set(groupTrans.map(t => t.category))).sort().map(cat => {
+                                    const catTrans = groupTrans.filter(t => t.category === cat);
+                                    let catTotal = 0;
+                                    if (isIncomeGroup) {
+                                        catTotal = catTrans.reduce((acc, t) => acc + t.amount, 0);
+                                    } else {
+                                        const rawCatSum = catTrans.reduce((acc, t) => acc + t.amount, 0);
+                                        catTotal = Math.abs(rawCatSum);
+                                    }
+
+                                    if (catTotal < 0.01) return null;
+
                                     return (
                                         <div key={cat} className="flex justify-between text-xs text-gray-500">
                                             <span>{cat}</span>
@@ -588,8 +763,8 @@ export default function App() {
   };
 
   const renderRealized = () => {
-    // Ordenar categorias alfabeticamente para o dropdown
-    const sortedCategories = Object.values(TransactionCategory).sort();
+    // Usa a lista dinâmica de categorias para o dropdown
+    const sortedCategories = [...data.categories].sort((a, b) => a.name.localeCompare(b.name));
 
     const filteredTransactions = data.transactions.filter(t => {
       if (dateRange.start && t.date < dateRange.start) return false;
@@ -656,7 +831,7 @@ export default function App() {
                             className="w-full text-xs bg-white border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-gray-700 cursor-pointer hover:border-blue-300 transition-colors"
                         >
                             {sortedCategories.map((cat) => (
-                                <option key={cat} value={cat}>{cat}</option>
+                                <option key={cat.id} value={cat.name}>{cat.name}</option>
                             ))}
                         </select>
                     </div>
@@ -670,39 +845,64 @@ export default function App() {
     );
   };
 
-  const renderInvestments = () => (
-      <div className="bg-white p-6 rounded-xl shadow-sm">
-          <h3 className="text-lg font-bold mb-4">Carteira de Investimentos</h3>
-          <div className="h-64 mb-6"><AllocationChart assets={data.assets} /></div>
-          <table className="w-full text-sm">
-              <thead><tr className="bg-gray-50 text-left"><th className="p-2">Ativo</th><th className="p-2">Tipo</th><th className="p-2 text-right">Valor</th></tr></thead>
-              <tbody>
-                  {data.assets.map((a, i) => (
-                      <tr key={i} className="border-t">
-                          <td className="p-2 font-bold">{a.ticker}</td>
-                          <td className="p-2">{a.type}</td>
-                          <td className="p-2 text-right">R$ {a.totalValue.toLocaleString('pt-BR')}</td>
-                      </tr>
-                  ))}
-              </tbody>
-          </table>
-      </div>
-  );
+  const renderInvestments = () => {
+      const financialAssets = data.assets.filter(a => 
+          a.type !== 'Veículo' && 
+          a.type !== 'Imóvel'
+      );
+
+      return (
+          <div className="bg-white p-6 rounded-xl shadow-sm">
+              <h3 className="text-lg font-bold mb-4">Carteira de Investimentos</h3>
+              <div className="h-64 mb-6">
+                 <AllocationChart assets={financialAssets} />
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[500px]">
+                    <thead>
+                        <tr className="bg-gray-50 text-left text-gray-600 border-b">
+                            <th className="p-3 font-semibold">Ativo</th>
+                            <th className="p-3 font-semibold">Instituição</th>
+                            <th className="p-3 font-semibold">Tipo</th>
+                            <th className="p-3 font-semibold text-right">Qtd.</th>
+                            <th className="p-3 font-semibold text-right">Preço</th>
+                            <th className="p-3 font-semibold text-right">Valor Total</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                        {financialAssets.map((a, i) => (
+                            <tr key={i} className="hover:bg-gray-50 transition-colors">
+                                <td className="p-3 font-medium text-gray-900">
+                                   {(a.ticker && a.ticker !== 'null' && a.ticker !== 'undefined') ? a.ticker : <span className="text-gray-400 font-normal">-</span>}
+                                </td>
+                                <td className="p-3 text-gray-600">
+                                   {(a.institution && a.institution !== 'null') ? a.institution : '-'}
+                                </td>
+                                <td className="p-3">
+                                    <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs">{a.type}</span>
+                                </td>
+                                <td className="p-3 text-right text-gray-600">{a.quantity ? a.quantity.toLocaleString('pt-BR') : '-'}</td>
+                                <td className="p-3 text-right text-gray-600">{a.currentPrice ? a.currentPrice.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) : '-'}</td>
+                                <td className="p-3 text-right font-bold text-gray-800">{a.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+              </div>
+          </div>
+      );
+  };
   
-  // PAGINA 6 - RESUMO SIMULAÇÃO
   const renderSimulationSummary = () => {
-    // Calcular dados iniciais se estiverem zerados (ex: pegar do ativo total e renda mensal)
     const activePatrimony = data.assets.reduce((acc, curr) => acc + curr.totalValue, 0);
-    const estimatedMonthlySave = Math.max(0, data.personalData.netIncomeAnnual / 12 * 0.2); // Estima 20% se não houver dado
+    const estimatedMonthlySave = Math.max(0, data.personalData.netIncomeAnnual / 12 * 0.2);
     
-    // Se a simulação estiver zerada, usa os dados reais como base visual (sem salvar ainda)
     const simConfig = {
         ...data.simulation,
         initialPatrimony: data.simulation.initialPatrimony || activePatrimony,
         monthlyContribution: data.simulation.monthlyContribution || estimatedMonthlySave
     };
 
-    // Recalcula projeção com base nos dados possivelmente ajustados
     const projection = [];
     let currentBalance = simConfig.initialPatrimony;
     let totalInvested = simConfig.initialPatrimony;
@@ -757,9 +957,7 @@ export default function App() {
     );
   };
 
-  // PAGINA 7 - SIMULAÇÃO DETALHADA
   const renderDetailedSimulation = () => {
-     // Permite edição simples dos parametros
      const handleChange = (field: keyof typeof data.simulation, value: string) => {
          setData(prev => ({
              ...prev,
@@ -771,7 +969,6 @@ export default function App() {
      let currentBalance = data.simulation.initialPatrimony;
      const rows = [];
      
-     // Gera 60 meses para exibição de exemplo (ou mais se quiser paginar)
      for(let m=1; m <= 60; m++) {
          const interest = currentBalance * monthlyRate;
          const contribution = data.simulation.monthlyContribution;
@@ -836,11 +1033,9 @@ export default function App() {
      )
   }
 
-  // PAGINA 8 - SIMULAÇÃO SEM PERPETUIDADE (Consumo de Capital)
   const renderDecumulation = () => {
-    // Cálculo simplificado: Quanto dura o dinheiro se parar de aportar e começar a sacar X?
-    const patrimony = (data.simulation.initialPatrimony || 0) + (data.simulation.monthlyContribution * 12 * 10); // Supor 10 anos de acumulação
-    const monthlyWithdrawal = 10000; // Exemplo fixo ou configurável
+    const patrimony = (data.simulation.initialPatrimony || 0) + (data.simulation.monthlyContribution * 12 * 10);
+    const monthlyWithdrawal = 10000;
     const yearsToZero = Math.log(monthlyWithdrawal / (monthlyWithdrawal - patrimony * (data.simulation.interestRateReal/12))) / Math.log(1 + data.simulation.interestRateReal/12) / 12;
 
     return (
@@ -873,9 +1068,7 @@ export default function App() {
     );
   };
 
-  // PAGINA 9 - PROJEÇÃO E CENÁRIOS
   const renderProjectionScenarios = () => {
-    // Check de segurança se não houver simulação
     const years = data.simulation.years || 30;
     const initial = data.simulation.initialPatrimony || 0;
     
@@ -907,7 +1100,6 @@ export default function App() {
         o = (o + contrib) * 1.10;
     }
     
-    // Safety check for array access
     const finalData = dataPoints[dataPoints.length - 1] || dataPoints[0];
 
     return (
@@ -935,20 +1127,98 @@ export default function App() {
     );
   };
   
-  const renderCategories = () => (
-    <div className="bg-white p-6 rounded-xl shadow-sm">
-        <h3 className="text-lg font-bold mb-4">Categorias do Sistema</h3>
-        <p className="text-gray-500 mb-4">Estas são as categorias utilizadas pela IA para classificar as transações.</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {Object.values(TransactionCategory).map(cat => (
-                <div key={cat} className="text-xs bg-gray-100 p-2 rounded text-gray-700">{cat}</div>
-            ))}
-        </div>
-    </div>
-  );
+  // PAGINA 10: CATEGORIAS (CUSTOMIZÁVEL)
+  const renderCategories = () => {
+    // Agrupa as categorias por tipo para exibição
+    const groupedCategories = data.categories.reduce((acc, cat) => {
+        if (!acc[cat.group]) acc[cat.group] = [];
+        acc[cat.group].push(cat);
+        return acc;
+    }, {} as Record<string, CategoryItem[]>);
+
+    // Ordem de exibição dos grupos
+    const groupOrder: CategoryGroup[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+
+    return (
+      <div className="space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-end gap-4">
+              <div className="w-full">
+                  <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                     <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
+                  </h3>
+                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações agora são salvas permanentemente no sistema.</p>
+                  
+                  <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                          <label className="text-xs font-bold text-gray-500 block mb-1">Nova Categoria</label>
+                          <input 
+                              type="text" 
+                              placeholder="Ex: Natação, Curso de Python..." 
+                              className="w-full border border-slate-300 p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-slate-100 text-slate-900 placeholder-slate-400"
+                              value={newCategoryName}
+                              onChange={(e) => setNewCategoryName(e.target.value)}
+                              disabled={isLoadingCategories}
+                          />
+                      </div>
+                      <div className="w-40">
+                          <label className="text-xs font-bold text-gray-500 block mb-1">Grupo</label>
+                          <select 
+                             className="w-full border p-2 rounded-lg text-sm bg-white"
+                             value={newCategoryGroup}
+                             onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
+                             disabled={isLoadingCategories}
+                          >
+                             {groupOrder.map(g => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                      </div>
+                      <button 
+                         onClick={handleAddCategory}
+                         disabled={isLoadingCategories}
+                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors disabled:bg-gray-300"
+                         title="Adicionar"
+                      >
+                         {isLoadingCategories ? <Loader2 className="w-5 h-5 animate-spin"/> : <Plus className="w-5 h-5" />}
+                      </button>
+                  </div>
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+             {groupOrder.map(group => {
+                 const cats = groupedCategories[group] || [];
+                 if (cats.length === 0) return null;
+
+                 return (
+                     <div key={group} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                         <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
+                             <h4 className="font-bold text-gray-700 text-sm">{group}</h4>
+                             <span className="text-xs text-gray-400 bg-white px-2 py-0.5 rounded border">{cats.length}</span>
+                         </div>
+                         <div className="p-4 flex flex-wrap gap-2">
+                             {cats.map(cat => (
+                                 <div key={cat.id} className={`group flex items-center gap-1 border rounded px-2 py-1 text-xs hover:border-blue-300 transition-colors ${cat.isCustom ? 'bg-blue-50 text-blue-800 border-blue-100' : 'bg-white text-gray-700 border-gray-200'}`}>
+                                     <span>{cat.name}</span>
+                                     {cat.isCustom && (
+                                         <button 
+                                            onClick={() => handleDeleteCategory(cat.id)}
+                                            className="text-blue-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            title="Remover"
+                                         >
+                                             <X className="w-3 h-3" />
+                                         </button>
+                                     )}
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 )
+             })}
+          </div>
+      </div>
+    );
+  };
   
   const renderUpload = () => {
-    // Check de debug da chave API
     const isApiConfigured = typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__ && __GEMINI_API_KEY__.length > 0;
     
     return (
@@ -968,6 +1238,21 @@ export default function App() {
                 {isApiConfigured ? 'API Key: Configurada ✅' : 'API Key: Ausente ❌ (Verifique Vercel)'}
             </div>
           </div>
+        </div>
+
+        {/* --- CUSTOM CONTEXT INPUT --- */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+           <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2 text-sm uppercase">
+              <MessageSquare className="w-4 h-4 text-blue-500" /> Contexto Adicional (Opcional)
+           </h3>
+           <textarea
+             className="w-full border p-3 rounded-lg text-sm text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+             rows={3}
+             placeholder="Ex: 'Considere todas as compras na Amazon como Presentes', 'Este extrato é da conta conjunta, divida tudo por 2', 'Ignore transações da empresa X'..."
+             value={customContext}
+             onChange={e => setCustomContext(e.target.value)}
+           />
+           <p className="text-xs text-gray-400 mt-2 text-right">Estas instruções serão enviadas para a IA antes do processamento.</p>
         </div>
 
         <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" accept=".pdf,.csv,.ofx,.txt" multiple />
@@ -1064,7 +1349,7 @@ export default function App() {
     { id: 0, title: '1. Resumo Pessoal', icon: Activity, render: renderSummary },
     { id: 1, title: '2. Orçamento', icon: Calculator, render: renderBudget },
     { id: 2, title: '3. Movimentações', icon: FileText, render: renderRealized },
-    { id: 3, title: '4. Balanço', icon: Layers, render: renderSimulationSummary }, // Reutilizando para exemplo, mas idealmente teria seu proprio
+    { id: 3, title: '4. Balanço Patrimonial', icon: Layers, render: renderSimulationSummary },
     { id: 4, title: '5. Investimentos', icon: TrendingUp, render: renderInvestments },
     { id: 5, title: '6. Resumo Sim.', icon: BarChart3, render: renderSimulationSummary },
     { id: 6, title: '7. Sim. Detalhada', icon: DollarSign, render: renderDetailedSimulation },
@@ -1083,10 +1368,17 @@ export default function App() {
       {/* FORCE PASSWORD CHANGE MODAL */}
       {mustChangePassword && <ForcePasswordChangeModal onClose={() => window.location.reload()} />}
 
-      <aside className="w-64 bg-slate-900 text-white flex flex-col fixed h-full z-10 overflow-y-auto custom-scrollbar">
-        <div className="p-6 border-b border-slate-800">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-teal-400 bg-clip-text text-transparent">FinPlanner</h1>
-          <p className="text-xs text-slate-500 mt-1">Consultoria Digital</p>
+      <aside className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-blue-900 text-white flex flex-col fixed h-full z-10 transition-all duration-300 overflow-y-auto custom-scrollbar`}>
+        <div className={`p-6 border-b border-blue-800 flex items-center ${isSidebarExpanded ? 'justify-between' : 'justify-center'}`}>
+          {isSidebarExpanded && (
+            <div>
+              <h1 className="text-xl font-bold text-white">FinPlanner</h1>
+              <p className="text-xs text-blue-200 mt-1">Consultoria Digital</p>
+            </div>
+          )}
+          <button onClick={() => setIsSidebarExpanded(!isSidebarExpanded)} className="text-blue-200 hover:text-white p-1 rounded hover:bg-blue-800 transition-colors">
+            {isSidebarExpanded ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-6 h-6" />}
+          </button>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           {TABS.map((tab) => {
@@ -1095,22 +1387,23 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                className={`w-full flex items-center ${isSidebarExpanded ? 'justify-start px-4' : 'justify-center px-0'} py-3 text-sm font-medium rounded-lg transition-all ${activeTab === tab.id ? 'bg-blue-800 text-white shadow-md' : 'text-blue-100 hover:bg-blue-800 hover:text-white'}`}
+                title={!isSidebarExpanded ? tab.title : ''}
               >
-                <Icon className="w-5 h-5" />
-                {tab.title}
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                {isSidebarExpanded && <span className="ml-3 truncate">{tab.title}</span>}
               </button>
             )
           })}
         </nav>
-        <div className="p-4 border-t border-slate-800">
-          <button onClick={handleLogout} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm w-full">
-            <LogOut className="w-4 h-4" /> Sair
+        <div className="p-4 border-t border-blue-800">
+          <button onClick={handleLogout} className={`flex items-center ${isSidebarExpanded ? 'justify-start px-0' : 'justify-center'} gap-2 text-blue-200 hover:text-white transition-colors text-sm w-full`}>
+            <LogOut className="w-4 h-4 flex-shrink-0" /> {isSidebarExpanded && 'Sair'}
           </button>
         </div>
       </aside>
 
-      <main className="flex-1 ml-64 p-8 relative">
+      <main className={`flex-1 ${isSidebarExpanded ? 'ml-64' : 'ml-20'} p-8 relative transition-all duration-300`}>
         {isLoadingData && (
             <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center backdrop-blur-sm">
                 <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
@@ -1119,6 +1412,7 @@ export default function App() {
         <header className="flex justify-between items-center mb-8">
           <div>
             <h2 className="text-2xl font-bold text-gray-800">{TABS[activeTab].title}</h2>
+            {/* Ocultar subtítulo apenas na página 3 (ID 2) */}
             {activeTab !== 2 && (
                 <p className="text-sm text-gray-500 mt-1">
                     {data.selectedClientId 
@@ -1137,7 +1431,6 @@ export default function App() {
                          : 'Selecionar Cliente'}
                      <ChevronRight className="w-4 h-4 rotate-90" />
                  </button>
-                 {/* Utilizando padding-top (pt-2) em vez de margin-top (mt-2) para criar uma ponte invisível para o hover */}
                  <div className="absolute right-0 top-full pt-2 w-56 hidden group-hover:block z-50">
                      <div className="bg-white rounded-xl shadow-xl border border-gray-100 p-2 max-h-64 overflow-y-auto">
                          {data.clients.length === 0 && <p className="text-xs text-gray-400 p-2">Sem clientes</p>}

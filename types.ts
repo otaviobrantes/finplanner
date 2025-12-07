@@ -190,7 +190,7 @@ export interface Transaction {
   date: string;
   description: string;
   amount: number;
-  category: TransactionCategory;
+  category: TransactionCategory | string; // Permitir string para categorias customizadas
   type: CategoryGroup; // "Essencial", "Saúde", etc.
   institution: string;
 }
@@ -215,6 +215,13 @@ export interface SimulationConfig {
   lifeExpectancy: number;
 }
 
+export interface CategoryItem {
+  id: string;
+  name: string;
+  group: CategoryGroup;
+  isCustom?: boolean;
+}
+
 export interface AppState {
   clients: Client[];
   selectedClientId: string | null;
@@ -222,6 +229,7 @@ export interface AppState {
   transactions: Transaction[];
   assets: Asset[];
   simulation: SimulationConfig;
+  categories: CategoryItem[]; // Nova lista dinâmica de categorias
   lastUpdated: string | null;
 }
 
@@ -266,5 +274,6 @@ export const INITIAL_STATE: AppState = {
     retirementAge: 65,
     lifeExpectancy: 90
   },
+  categories: [], // Será populado no App.tsx
   lastUpdated: null
 };

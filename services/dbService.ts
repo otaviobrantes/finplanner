@@ -1,6 +1,6 @@
 
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { AppState, Client } from '../types';
+import { AppState, Client, CategoryItem, CategoryGroup } from '../types';
 
 // --- GESTÃO DE CLIENTES (CONSULTOR) ---
 
@@ -37,6 +37,65 @@ export const createClient = async (consultantId: string, name: string): Promise<
 export const deleteClient = async (clientId: string) => {
     const { error } = await supabase.from('clients').delete().eq('id', clientId);
     if (error) throw error;
+};
+
+// --- GESTÃO DE CATEGORIAS (CONSULTOR) ---
+
+export const fetchCustomCategories = async (userId: string): Promise<CategoryItem[]> => {
+    if (!isSupabaseConfigured()) return [];
+
+    const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('user_id', userId);
+
+    if (error) {
+        console.error('Erro ao buscar categorias:', error);
+        return [];
+    }
+
+    // Mapeia para o formato interno CategoryItem
+    return (data || []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        group: item.group as CategoryGroup,
+        isCustom: true
+    }));
+};
+
+export const addCustomCategory = async (userId: string, name: string, group: string): Promise<CategoryItem | null> => {
+    if (!isSupabaseConfigured()) return null;
+
+    const { data, error } = await supabase
+        .from('categories')
+        .insert({ 
+            user_id: userId,
+            name: name, 
+            group: group 
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Erro ao adicionar categoria:', error);
+        return null;
+    }
+
+    return {
+        id: data.id,
+        name: data.name,
+        group: data.group as CategoryGroup,
+        isCustom: true
+    };
+};
+
+export const deleteCustomCategory = async (categoryId: string) => {
+    if (!isSupabaseConfigured()) return;
+    const { error } = await supabase.from('categories').delete().eq('id', categoryId);
+    if (error) {
+        console.error('Erro ao deletar categoria:', error);
+        throw error;
+    }
 };
 
 // --- DADOS FINANCEIROS ---
@@ -149,29 +208,39 @@ export const fetchClientData = async (clientId: string): Promise<Partial<AppStat
     if (!isSupabaseConfigured() || !clientId) return null;
 
     try {
-        // Buscar Dados do Perfil
+        // 1. Buscar Cliente (Fonte da verdade para o Nome se o profile falhar)
+        const { data: client } = await supabase
+            .from('clients')
+            .select('name')
+            .eq('id', clientId)
+            .single();
+
+        // 2. Buscar Dados do Perfil (Dados enriquecidos pela IA)
         const { data: profile } = await supabase
             .from('profiles')
             .select('*')
             .eq('client_id', clientId)
             .single();
 
-        // Buscar Transações
+        // 3. Buscar Transações
         const { data: transactions } = await supabase
             .from('transactions')
             .select('*')
             .eq('client_id', clientId)
             .order('date', { ascending: false });
 
-        // Buscar Ativos
+        // 4. Buscar Ativos
         const { data: assets } = await supabase
             .from('assets')
             .select('*')
             .eq('client_id', clientId);
 
+        // Prioridade do Nome: Profile (IA) -> Client (Cadastro) -> Fallback
+        const displayName = profile?.name || client?.name || 'Cliente Selecionado';
+
         return {
             personalData: {
-                name: profile?.name || 'Cliente Selecionado',
+                name: displayName,
                 email: profile?.email || '',
                 birthDate: '', 
                 nationality: 'Brasileira',
