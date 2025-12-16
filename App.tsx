@@ -271,6 +271,14 @@ export default function App() {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  // AUTO-SAVE CATEGORIES EFFECT
+  // Garante que o LocalStorage seja atualizado sempre que o estado de categorias mudar
+  useEffect(() => {
+    if (data.categories.length > 0) {
+        localStorage.setItem('finplanner_categories', JSON.stringify(data.categories));
+    }
+  }, [data.categories]);
+
   // Sync capital de decumulação com o patrimônio do cliente carregado
   useEffect(() => {
     const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
@@ -413,7 +421,7 @@ export default function App() {
       const updatedCategories = [...currentList, newItem];
       
       setData(prev => ({ ...prev, categories: updatedCategories }));
-      localStorage.setItem('finplanner_categories', JSON.stringify(updatedCategories));
+      // O useEffect agora lida com o LocalStorage
       
       setNewCategoryName("");
       setSuccessMessage("Categoria adicionada!");
@@ -426,14 +434,12 @@ export default function App() {
       
       const updatedCategories = data.categories.filter(c => c.id !== id);
       setData(prev => ({ ...prev, categories: updatedCategories }));
-      localStorage.setItem('finplanner_categories', JSON.stringify(updatedCategories));
   };
 
   const handleRestoreCategories = () => {
       if (!confirm("Isso irá apagar todas as categorias personalizadas e restaurar o padrão. Continuar?")) return;
       const defaults = generateDefaultCategories();
       setData(prev => ({ ...prev, categories: defaults }));
-      localStorage.setItem('finplanner_categories', JSON.stringify(defaults));
   };
 
   const handleLogout = async () => {
@@ -1059,72 +1065,79 @@ export default function App() {
   
   // PAGINA 10: CATEGORIAS (CUSTOMIZÁVEL)
   const renderCategories = () => {
-    // Ordena alfabeticamente para facilitar a busca visual
+    // 1. (Removido) Filtragem por Busca
+    // 2. Ordenação Alfabética
     const sortedCategories = [...data.categories].sort((a, b) => a.name.localeCompare(b.name));
 
-    // Agrupa as categorias por tipo para exibição
+    // 3. Agrupamento
     const groupedCategories = sortedCategories.reduce((acc, cat) => {
-        // Fallback: Se o grupo estiver faltando, define como 'Outros' para não sumir da tela
         const groupKey = cat.group || 'Outros';
         if (!acc[groupKey]) acc[groupKey] = [];
         acc[groupKey].push(cat);
         return acc;
     }, {} as Record<string, CategoryItem[]>);
 
-    // Ordem de exibição dos grupos
-    const groupOrder: CategoryGroup[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+    // 4. Definição da Ordem dos Grupos (Dinâmica)
+    // Pega a lista padrão, mas adiciona qualquer grupo extra que esteja nos dados atuais
+    const defaultGroupOrder: string[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+    const currentGroups = Object.keys(groupedCategories);
+    const finalGroupOrder = Array.from(new Set([...defaultGroupOrder, ...currentGroups]));
 
     return (
       <div className="space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-end gap-4">
-              <div className="w-full">
-                  <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                     <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
-                  </h3>
-                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações são salvas automaticamente e usadas nas próximas análises.</p>
-                  
-                  <div className="flex gap-2 items-end">
-                      <div className="flex-1">
-                          <label className="text-xs font-bold text-gray-500 block mb-1">Nova Categoria</label>
-                          <input 
-                              type="text" 
-                              placeholder="Ex: Natação, Curso de Python..." 
-                              className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                              value={newCategoryName}
-                              onChange={(e) => setNewCategoryName(e.target.value)}
-                          />
-                      </div>
-                      <div className="w-40">
-                          <label className="text-xs font-bold text-gray-500 block mb-1">Grupo</label>
-                          <select 
-                             className="w-full border p-2 rounded-lg text-sm bg-white"
-                             value={newCategoryGroup}
-                             onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
-                          >
-                             {groupOrder.map(g => <option key={g} value={g}>{g}</option>)}
-                          </select>
-                      </div>
-                      <button 
-                         onClick={handleAddCategory}
-                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors"
-                         title="Adicionar"
-                      >
-                         <Plus className="w-5 h-5" />
-                      </button>
-                  </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                 <button 
-                    onClick={handleRestoreCategories}
-                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors"
-                 >
-                    <RotateCcw className="w-3 h-3" /> Restaurar Padrão
-                 </button>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col gap-4">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
+                <div className="w-full">
+                    <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
+                    </h3>
+                    <p className="text-gray-500 text-sm mb-4">Ensine a IA a classificar melhor seus extratos. Adicione categorias personalizadas aqui.</p>
+                    
+                    {/* ADICIONAR NOVA CATEGORIA */}
+                    <div className="flex gap-2 items-end mb-4 md:mb-0">
+                        <div className="flex-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">Nova Categoria</label>
+                            <input 
+                                type="text" 
+                                placeholder="Ex: Natação, Curso de Python..." 
+                                className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                value={newCategoryName}
+                                onChange={(e) => setNewCategoryName(e.target.value)}
+                            />
+                        </div>
+                        <div className="w-40">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">Grupo</label>
+                            <select 
+                                className="w-full border p-2 rounded-lg text-sm bg-white"
+                                value={newCategoryGroup}
+                                onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
+                            >
+                                {defaultGroupOrder.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                        </div>
+                        <button 
+                            onClick={handleAddCategory}
+                            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors"
+                            title="Adicionar"
+                        >
+                            <Plus className="w-5 h-5" />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex flex-col gap-2 w-full md:w-auto items-end">
+                    <button 
+                        onClick={handleRestoreCategories}
+                        className="text-xs text-red-500 hover:text-red-700 flex items-center justify-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors w-full md:w-auto"
+                    >
+                        <RotateCcw className="w-3 h-3" /> Restaurar Padrão
+                    </button>
+                </div>
               </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             {groupOrder.map(group => {
+             {finalGroupOrder.map(group => {
                  const cats = groupedCategories[group] || [];
                  if (cats.length === 0) return null;
 
