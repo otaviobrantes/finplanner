@@ -62,11 +62,25 @@ export const extractFinancialData = async (
 
   const prompt = `
     You are a specialized High-End Financial Auditor AI (FinPlanner).
-    Your goal is to extract structured financial data from bank statements (PDF/text).
+    Your goal is to extract structured financial data from bank statements (PDF/text) and Income Tax Returns (Imposto de Renda).
     
     *** CRITICAL: IDENTIFY THE CLIENT ***
     Look at the top of the statement for the Account Holder Name (Nome do Cliente / Titular).
     Return this as 'detectedClientName'.
+
+    *** CRITICAL: BALANCE SHEET EXTRACTION (ATOB vs PASSIVO) ***
+    1. **ASSETS (Bens e Direitos)**:
+       - Identify all assets listed in "Bens e Direitos" or investments in statements.
+       - Classify them as: 'Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo'.
+       - Use 'institution' to store the bank or broker name.
+    
+    2. **LIABILITIES (Dívidas e Obrigações) - AGGRESSIVE EXTRACTION**:
+       - You MUST hunt for debts. Do not ignore them.
+       - **Negative Balances**: If the checking account ends with a negative balance (Saldo Devedor), create a liability named "Cheque Especial / Saldo Devedor" with the POSITIVE absolute value.
+       - **Loans**: Look for "Empréstimos", "Consignado", "Financiamento", "Adiantamento a Depositante", "LIS".
+       - **Credit Card Dept**: If there is a section "Saldo Parcelado" or "Total Financiado", extract it.
+       - **Tax Return**: Look for "Dívidas e Ônus Reais".
+       - **Format**: Store in 'assets' array but set type strictly to 'Dívida'. The 'totalValue' must be POSITIVE (the amount owed).
 
     *** CRITICAL: CATEGORIZE TRANSACTIONS ***
     You must categorize every transaction into one of the EXACT categories listed below.
@@ -81,7 +95,7 @@ export const extractFinancialData = async (
 
     2. **Context Rules**:
        - Negative values are expenses. Positive values are income.
-       - Ignore balance rows (Saldos).
+       - Ignore balance rows (Saldos) inside the transaction list, UNLESS it is the final negative balance which indicates a Debt.
        - Extract the date in YYYY-MM-DD format.
 
     ${userContext ? `
@@ -180,7 +194,7 @@ export const extractFinancialData = async (
               type: Type.OBJECT,
               properties: {
                 ticker: { type: Type.STRING },
-                type: { type: Type.STRING },
+                type: { type: Type.STRING, enum: ['Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'Dívida'] },
                 quantity: { type: Type.NUMBER },
                 currentPrice: { type: Type.NUMBER },
                 totalValue: { type: Type.NUMBER },

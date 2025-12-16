@@ -4,7 +4,7 @@ import {
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
   UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
-  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw
+  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
@@ -30,15 +30,8 @@ interface QueueItem {
   resultMessage?: string;
 }
 
-// Helper: Gera lista padrão baseada no Enum original
-const generateDefaultCategories = (): CategoryItem[] => {
-    return Object.values(TransactionCategory).map(cat => ({
-        id: crypto.randomUUID(),
-        name: cat,
-        group: getCategoryGroup(cat),
-        isCustom: false
-    }));
-};
+// Helper: Safe ID Generator (Avoids crypto.randomUUID crash on insecure contexts)
+const generateId = () => Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
 
 // Helper to determine group from category (Legacy Helper + Fallback)
 const getCategoryGroup = (cat: string): CategoryGroup => {
@@ -73,6 +66,32 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
   
   // Essencial (Fallback amplo)
   return 'Essencial';
+};
+
+// Helper: Gera lista padrão baseada no Enum original
+const generateDefaultCategories = (): CategoryItem[] => {
+    return Object.values(TransactionCategory).map(cat => ({
+        id: generateId(),
+        name: cat,
+        group: getCategoryGroup(cat),
+        isCustom: false
+    }));
+};
+
+// Helper: Carrega categorias do LocalStorage de forma segura
+const loadCategoriesFromStorage = (): CategoryItem[] => {
+    try {
+        const saved = localStorage.getItem('finplanner_categories');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed;
+            }
+        }
+    } catch (e) {
+        console.error("Erro ao ler categorias:", e);
+    }
+    return generateDefaultCategories();
 };
 
 // Componente Modal de Troca de Senha
@@ -173,11 +192,26 @@ const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
+const InfoRow = ({ label, value }: { label: string; value: string | number }) => (
+  <div className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+    <span className="text-sm text-gray-500">{label}</span>
+    <span className="text-sm font-medium text-gray-900 text-right">{value}</span>
+  </div>
+);
+
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [activeTab, setActiveTab] = useState(11);
-  const [data, setData] = useState<AppState>(INITIAL_STATE);
+  
+  // INICIALIZAÇÃO DE ESTADO ROBUSTA: Carrega categorias imediatamente
+  const [data, setData] = useState<AppState>(() => {
+      const cats = loadCategoriesFromStorage();
+      return {
+          ...INITIAL_STATE,
+          categories: cats
+      };
+  });
   
   // Sidebar State
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
@@ -197,6 +231,7 @@ export default function App() {
   // Success Alert State
   const [showSuccessAlert, setShowSuccessAlert] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  const [alertType, setAlertType] = useState<'success' | 'error'>('success');
 
   // New Client Creation State
   const [newClientName, setNewClientName] = useState("");
@@ -211,23 +246,41 @@ export default function App() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryGroup, setNewCategoryGroup] = useState<CategoryGroup>("Essencial");
 
-  // Load Categories on Startup
+  // Estado para a Calculadora de Decumulação (Página 8)
+  const [decumulationConfig, setDecumulationConfig] = useState({
+    capital: 0,
+    withdrawal: 10000,
+    interestRate: 0.06
+  });
+
+  // Listener para sincronizar abas e garantir persistência
   useEffect(() => {
-    // 1. Tenta carregar do LocalStorage
-    const savedCats = localStorage.getItem('finplanner_categories');
-    if (savedCats) {
-        try {
-            const parsed = JSON.parse(savedCats);
-            setData(prev => ({ ...prev, categories: parsed }));
-        } catch (e) {
-            console.error("Erro ao carregar categorias salvas, resetando...", e);
-            setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
+    const handleStorageChange = (e: StorageEvent) => {
+        if (e.key === 'finplanner_categories' && e.newValue) {
+            try {
+                const parsed = JSON.parse(e.newValue);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    setData(prev => ({ ...prev, categories: parsed }));
+                }
+            } catch (err) {
+                console.error("Erro ao sincronizar categorias entre abas", err);
+            }
         }
-    } else {
-        // 2. Se não existir, carrega o Default do Enum
-        setData(prev => ({ ...prev, categories: generateDefaultCategories() }));
-    }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
+
+  // Sync capital de decumulação com o patrimônio do cliente carregado
+  useEffect(() => {
+    const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalAssets = data.assets.filter(a => a.type !== 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const netWorth = totalAssets - liabilities;
+
+    if (netWorth > 0 && decumulationConfig.capital === 0) {
+        setDecumulationConfig(prev => ({ ...prev, capital: netWorth }));
+    }
+  }, [data.assets]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -252,7 +305,8 @@ export default function App() {
             loadClients(session.user.id);
           }
       } else {
-          setData(INITIAL_STATE);
+          // CORREÇÃO CRÍTICA: Ao resetar, preserva as categorias carregadas
+          setData(prev => ({ ...INITIAL_STATE, categories: prev.categories.length > 0 ? prev.categories : loadCategoriesFromStorage() }));
           setMustChangePassword(false);
       }
     });
@@ -293,6 +347,7 @@ export default function App() {
           setData(prev => ({ ...prev, clients: [...prev.clients, newClient] }));
           setNewClientName("");
           setSuccessMessage(`Cliente ${newClient.name} cadastrado com sucesso!`);
+          setAlertType('success');
           setShowSuccessAlert(true);
       }
   };
@@ -332,21 +387,37 @@ export default function App() {
   
   const handleAddCategory = () => {
       if (!newCategoryName.trim()) return;
-      
+      const cleanName = newCategoryName.trim();
+
+      // Proteção: Se a lista estiver vazia (erro de carga), regenera os defaults antes de adicionar
+      let currentList = [...data.categories];
+      if (currentList.length === 0) {
+          currentList = generateDefaultCategories();
+      }
+
+      // Validação de Duplicidade (Case Insensitive)
+      if (currentList.some(c => c.name.toLowerCase() === cleanName.toLowerCase())) {
+          setSuccessMessage(`A categoria "${cleanName}" já existe!`);
+          setAlertType('error');
+          setShowSuccessAlert(true);
+          return;
+      }
+
       const newItem: CategoryItem = {
-          id: crypto.randomUUID(),
-          name: newCategoryName.trim(),
+          id: generateId(),
+          name: cleanName,
           group: newCategoryGroup,
           isCustom: true
       };
       
-      const updatedCategories = [...data.categories, newItem];
+      const updatedCategories = [...currentList, newItem];
       
       setData(prev => ({ ...prev, categories: updatedCategories }));
       localStorage.setItem('finplanner_categories', JSON.stringify(updatedCategories));
       
       setNewCategoryName("");
       setSuccessMessage("Categoria adicionada!");
+      setAlertType('success');
       setShowSuccessAlert(true);
   };
 
@@ -500,6 +571,7 @@ export default function App() {
 
     setIsProcessingQueue(false);
     setSuccessMessage("Fila processada! Verifique o status de cada arquivo.");
+    setAlertType('success');
     setShowSuccessAlert(true);
   };
 
@@ -507,7 +579,7 @@ export default function App() {
 
   const renderClients = () => (
       <div className="space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-end gap-4">
               <div>
                   <h3 className="text-xl font-bold text-gray-800">Carteira de Clientes</h3>
                   <p className="text-gray-500 text-sm">Gerencie seus clientes e acesse seus relatórios.</p>
@@ -757,8 +829,9 @@ export default function App() {
   };
 
   const renderRealized = () => {
-    // Usa a lista dinâmica de categorias para o dropdown
-    const sortedCategories = [...data.categories].sort((a, b) => a.name.localeCompare(b.name));
+    // Garante que SEMPRE existam categorias para exibir
+    const currentCategories = data.categories.length > 0 ? data.categories : generateDefaultCategories();
+    const sortedCategories = [...currentCategories].sort((a, b) => a.name.localeCompare(b.name));
 
     const filteredTransactions = data.transactions.filter(t => {
       if (dateRange.start && t.date < dateRange.start) return false;
@@ -824,6 +897,11 @@ export default function App() {
                             onChange={(e) => handleCategoryChange(t.id, e.target.value)}
                             className="w-full text-xs bg-white border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-gray-700 cursor-pointer hover:border-blue-300 transition-colors"
                         >
+                            {/* Fallback option if current category is not in the list */}
+                            {t.category && !sortedCategories.some(c => c.name === t.category) && (
+                                <option value={t.category}>{t.category}</option>
+                            )}
+
                             {sortedCategories.map((cat) => (
                                 <option key={cat.id} value={cat.name}>{cat.name}</option>
                             ))}
@@ -839,61 +917,258 @@ export default function App() {
     );
   };
 
-  const renderInvestments = () => {
-      const financialAssets = data.assets.filter(a => 
-          a.type !== 'Veículo' && 
-          a.type !== 'Imóvel'
-      );
+  // PAGINA 4: BALANÇO PATRIMONIAL
+  const renderBalanceSheet = () => {
+    const liabilities = data.assets.filter(a => a.type === 'Dívida');
+    const assets = data.assets.filter(a => a.type !== 'Dívida');
 
-      return (
-          <div className="bg-white p-6 rounded-xl shadow-sm">
-              <h3 className="text-lg font-bold mb-4">Carteira de Investimentos</h3>
-              <div className="h-64 mb-6">
-                 <AllocationChart assets={financialAssets} />
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[500px]">
-                    <thead>
-                        <tr className="bg-gray-50 text-left text-gray-600 border-b">
-                            <th className="p-3 font-semibold">Ativo</th>
-                            <th className="p-3 font-semibold">Instituição</th>
-                            <th className="p-3 font-semibold">Tipo</th>
-                            <th className="p-3 font-semibold text-right">Qtd.</th>
-                            <th className="p-3 font-semibold text-right">Preço</th>
-                            <th className="p-3 font-semibold text-right">Valor Total</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                        {financialAssets.map((a, i) => (
-                            <tr key={i} className="hover:bg-gray-50 transition-colors">
-                                <td className="p-3 font-medium text-gray-900">
-                                   {(a.ticker && a.ticker !== 'null' && a.ticker !== 'undefined') ? a.ticker : <span className="text-gray-400 font-normal">-</span>}
-                                </td>
-                                <td className="p-3 text-gray-600">
-                                   {(a.institution && a.institution !== 'null') ? a.institution : '-'}
-                                </td>
-                                <td className="p-3">
-                                    <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs">{a.type}</span>
-                                </td>
-                                <td className="p-3 text-right text-gray-600">{a.quantity ? a.quantity.toLocaleString('pt-BR') : '-'}</td>
-                                <td className="p-3 text-right text-gray-600">{a.currentPrice ? a.currentPrice.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) : '-'}</td>
-                                <td className="p-3 text-right font-bold text-gray-800">{a.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+    const totalLiabilities = liabilities.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalAssets = assets.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const netWorth = totalAssets - totalLiabilities;
+
+    return (
+        <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                     <p className="text-sm text-gray-500 font-medium">Ativo Total</p>
+                     <p className="text-2xl font-bold text-blue-600">{totalAssets.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                     <p className="text-sm text-gray-500 font-medium">Passivo Total</p>
+                     <p className="text-2xl font-bold text-red-600">{totalLiabilities.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                     <p className="text-sm text-gray-500 font-medium">Patrimônio Líquido</p>
+                     <p className={`text-2xl font-bold ${netWorth >= 0 ? 'text-green-600' : 'text-red-600'}`}>{netWorth.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
+                </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                <h3 className="font-bold text-gray-800 p-6 border-b">Bens e Direitos</h3>
+                 {assets.length === 0 ? <p className="p-6 text-gray-500 text-sm">Nenhum ativo cadastrado.</p> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                             <thead className="bg-gray-50 text-gray-600 font-medium">
+                                 <tr>
+                                     <th className="p-4">Descrição/Ticker</th>
+                                     <th className="p-4">Tipo</th>
+                                     <th className="p-4">Instituição</th>
+                                     <th className="p-4 text-right">Valor</th>
+                                 </tr>
+                             </thead>
+                             <tbody className="divide-y">
+                                 {assets.map((item, idx) => (
+                                     <tr key={idx} className="hover:bg-gray-50">
+                                         <td className="p-4 font-medium text-gray-900">{item.ticker}</td>
+                                         <td className="p-4 text-gray-500">{item.type}</td>
+                                         <td className="p-4 text-gray-500">{item.institution}</td>
+                                         <td className="p-4 text-right font-bold text-gray-800">{item.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+                                     </tr>
+                                 ))}
+                             </tbody>
+                        </table>
+                    </div>
+                 )}
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                <h3 className="font-bold text-gray-800 p-6 border-b flex items-center gap-2 text-red-600">
+                    <span className="w-2 h-2 rounded-full bg-red-600"></span>
+                    Dívidas e Obrigações
+                </h3>
+                 {liabilities.length === 0 ? <p className="p-6 text-gray-500 text-sm">Nenhuma dívida cadastrada.</p> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                             <thead className="bg-gray-50 text-gray-600 font-medium">
+                                 <tr>
+                                     <th className="p-4">Descrição</th>
+                                     <th className="p-4">Instituição</th>
+                                     <th className="p-4 text-right">Saldo Devedor</th>
+                                 </tr>
+                             </thead>
+                             <tbody className="divide-y">
+                                 {liabilities.map((item, idx) => (
+                                     <tr key={idx} className="hover:bg-gray-50">
+                                         <td className="p-4 font-medium text-gray-900">{item.ticker}</td>
+                                         <td className="p-4 text-gray-500">{item.institution}</td>
+                                         <td className="p-4 text-right font-bold text-red-600">{item.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+                                     </tr>
+                                 ))}
+                             </tbody>
+                        </table>
+                    </div>
+                 )}
+            </div>
+        </div>
+    );
+  };
+
+  // PAGINA 5: INVESTIMENTOS
+  const renderInvestments = () => {
+    // Filtra Dívidas e Veículos (uso pessoal, não investimento)
+    const investmentAssets = data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo');
+
+    if (investmentAssets.length === 0) {
+         return (
+            <div className="bg-white p-12 rounded-xl border border-dashed border-gray-300 text-center">
+                <TrendingUp className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Sem investimentos cadastrados</h3>
+                <p className="text-gray-500 mt-2">Adicione ativos via upload de extratos.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Alocação de Ativos</h3>
+                <div className="h-64">
+                    <AllocationChart assets={investmentAssets} />
+                </div>
+            </div>
+             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Carteira Detalhada</h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead>
+                            <tr className="border-b">
+                                <th className="pb-3">Ativo</th>
+                                <th className="pb-3">Tipo</th>
+                                <th className="pb-3 text-right">Qtd</th>
+                                <th className="pb-3 text-right">Preço Atual</th>
+                                <th className="pb-3 text-right">Valor Total</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
-              </div>
-          </div>
-      );
+                        </thead>
+                        <tbody className="divide-y">
+                            {investmentAssets.map((asset, i) => (
+                                <tr key={i} className="group hover:bg-gray-50">
+                                    <td className="py-3 font-medium">{asset.ticker}</td>
+                                    <td className="py-3 text-gray-500">{asset.type}</td>
+                                    <td className="py-3 text-right text-gray-600">{asset.quantity > 0 ? asset.quantity : '-'}</td>
+                                    <td className="py-3 text-right text-gray-600">{asset.currentPrice > 0 ? asset.currentPrice.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) : '-'}</td>
+                                    <td className="py-3 text-right font-bold text-gray-900">{asset.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
   };
   
-  const renderSimulationSummary = () => {
-    const activePatrimony = data.assets.reduce((acc, curr) => acc + curr.totalValue, 0);
+  // PAGINA 10: CATEGORIAS (CUSTOMIZÁVEL)
+  const renderCategories = () => {
+    // Ordena alfabeticamente para facilitar a busca visual
+    const sortedCategories = [...data.categories].sort((a, b) => a.name.localeCompare(b.name));
+
+    // Agrupa as categorias por tipo para exibição
+    const groupedCategories = sortedCategories.reduce((acc, cat) => {
+        // Fallback: Se o grupo estiver faltando, define como 'Outros' para não sumir da tela
+        const groupKey = cat.group || 'Outros';
+        if (!acc[groupKey]) acc[groupKey] = [];
+        acc[groupKey].push(cat);
+        return acc;
+    }, {} as Record<string, CategoryItem[]>);
+
+    // Ordem de exibição dos grupos
+    const groupOrder: CategoryGroup[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+
+    return (
+      <div className="space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-end gap-4">
+              <div className="w-full">
+                  <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                     <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
+                  </h3>
+                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações são salvas automaticamente e usadas nas próximas análises.</p>
+                  
+                  <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                          <label className="text-xs font-bold text-gray-500 block mb-1">Nova Categoria</label>
+                          <input 
+                              type="text" 
+                              placeholder="Ex: Natação, Curso de Python..." 
+                              className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                              value={newCategoryName}
+                              onChange={(e) => setNewCategoryName(e.target.value)}
+                          />
+                      </div>
+                      <div className="w-40">
+                          <label className="text-xs font-bold text-gray-500 block mb-1">Grupo</label>
+                          <select 
+                             className="w-full border p-2 rounded-lg text-sm bg-white"
+                             value={newCategoryGroup}
+                             onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
+                          >
+                             {groupOrder.map(g => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                      </div>
+                      <button 
+                         onClick={handleAddCategory}
+                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors"
+                         title="Adicionar"
+                      >
+                         <Plus className="w-5 h-5" />
+                      </button>
+                  </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                 <button 
+                    onClick={handleRestoreCategories}
+                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors"
+                 >
+                    <RotateCcw className="w-3 h-3" /> Restaurar Padrão
+                 </button>
+              </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+             {groupOrder.map(group => {
+                 const cats = groupedCategories[group] || [];
+                 if (cats.length === 0) return null;
+
+                 return (
+                     <div key={group} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                         <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
+                             <h4 className="font-bold text-gray-700 text-sm">{group}</h4>
+                             <span className="text-xs text-gray-400 bg-white px-2 py-0.5 rounded border">{cats.length}</span>
+                         </div>
+                         <div className="p-4 flex flex-wrap gap-2">
+                             {cats.map(cat => (
+                                 <div key={cat.id} className="group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 hover:border-blue-300 transition-colors">
+                                     <span>{cat.name}</span>
+                                     <button 
+                                        onClick={() => handleDeleteCategory(cat.id)}
+                                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        title="Remover"
+                                     >
+                                         <X className="w-3 h-3" />
+                                     </button>
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 )
+             })}
+          </div>
+      </div>
+    );
+  };
+  
+  // RENDER SIMULATION (ANTIGO RENDER SIMULATION SUMMARY)
+  const renderSimulation = () => {
+    // Calcula patrimônio ATIVO (bens e direitos) para a simulação, ignorando dívidas no montante inicial se desejar, 
+    // mas geralmente simula-se o PL. Vamos usar PL.
+    const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalAssets = data.assets.filter(a => a.type !== 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const netWorth = totalAssets - liabilities;
+
     const estimatedMonthlySave = Math.max(0, data.personalData.netIncomeAnnual / 12 * 0.2);
     
     const simConfig = {
         ...data.simulation,
-        initialPatrimony: data.simulation.initialPatrimony || activePatrimony,
+        initialPatrimony: data.simulation.initialPatrimony || netWorth, // Usa o PL como base
         monthlyContribution: data.simulation.monthlyContribution || estimatedMonthlySave
     };
 
@@ -1028,35 +1303,107 @@ export default function App() {
   }
 
   const renderDecumulation = () => {
-    const patrimony = (data.simulation.initialPatrimony || 0) + (data.simulation.monthlyContribution * 12 * 10);
-    const monthlyWithdrawal = 10000;
-    const yearsToZero = Math.log(monthlyWithdrawal / (monthlyWithdrawal - patrimony * (data.simulation.interestRateReal/12))) / Math.log(1 + data.simulation.interestRateReal/12) / 12;
+    // Calculadora simples de Perpetuidade / Decumulação
+    // Usa estado local do App (decumulationConfig)
+    
+    // Cálculo de Perpetuidade: V = R / i
+    const perpetuityCapital = (decumulationConfig.withdrawal * 12) / decumulationConfig.interestRate;
+    
+    // Cálculo de Duração (NPER)
+    // PMT = withdrawal, PV = capital, i = monthly rate
+    const monthlyRate = Math.pow(1 + decumulationConfig.interestRate, 1/12) - 1;
+    const monthlyWithdrawal = decumulationConfig.withdrawal;
+    const currentCapital = decumulationConfig.capital;
+    
+    let yearsLasting = Infinity;
+    
+    // Se a retirada mensal for maior que o rendimento mensal, o capital decresce
+    if (monthlyWithdrawal > currentCapital * monthlyRate) {
+        // n = -ln(1 - (PV * i) / PMT) / ln(1 + i)
+        // (PV * i) / PMT
+        const incomeRatio = (currentCapital * monthlyRate) / monthlyWithdrawal;
+        if (incomeRatio < 1) {
+            const nMonths = -Math.log(1 - incomeRatio) / Math.log(1 + monthlyRate);
+            yearsLasting = nMonths / 12;
+        }
+    }
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm space-y-6">
-            <h3 className="text-xl font-bold text-gray-800">Aposentadoria com Consumo de Capital</h3>
-            <p className="text-gray-600">Este módulo calcula a fase de "Decumulação": gastar o dinheiro acumulado até que ele acabe em uma data alvo (ex: 90 anos), permitindo retiradas mensais maiores do que viver apenas de renda.</p>
-            
-            <div className="bg-orange-50 p-6 rounded-xl border border-orange-100 text-center">
-                 <p className="text-lg text-orange-800 mb-2">Conceito: Morrer com Zero</p>
-                 <p className="text-sm text-orange-700">Diferente da perpetuidade (onde você nunca toca no principal), aqui calculamos o consumo inteligente do patrimônio para maximizar o padrão de vida na aposentadoria.</p>
+        <div className="space-y-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                    <Briefcase className="w-5 h-5 text-purple-600"/> Planejamento de Independência Financeira
+                </h3>
+                <p className="text-gray-500 text-sm mb-6">Simule quanto tempo seu patrimônio dura dado um padrão de vida (retirada mensal), ou quanto você precisa acumular para viver de renda passiva (perpetuidade).</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Capital Acumulado (R$)</label>
+                        <div className="relative">
+                            <span className="absolute left-3 top-2 text-gray-400 text-sm">R$</span>
+                            <input 
+                                type="number" 
+                                className="w-full border p-2 pl-8 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
+                                value={decumulationConfig.capital} 
+                                onChange={e => setDecumulationConfig({...decumulationConfig, capital: Number(e.target.value)})} 
+                            />
+                        </div>
+                    </div>
+                    <div>
+                         <label className="block text-xs font-bold text-gray-500 mb-1">Retirada Mensal Desejada (R$)</label>
+                         <div className="relative">
+                            <span className="absolute left-3 top-2 text-gray-400 text-sm">R$</span>
+                            <input 
+                                type="number" 
+                                className="w-full border p-2 pl-8 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
+                                value={decumulationConfig.withdrawal} 
+                                onChange={e => setDecumulationConfig({...decumulationConfig, withdrawal: Number(e.target.value)})} 
+                            />
+                        </div>
+                    </div>
+                    <div>
+                         <label className="block text-xs font-bold text-gray-500 mb-1">Rentabilidade Real Anual (%)</label>
+                         <div className="relative">
+                            <input 
+                                type="number" 
+                                step="0.1"
+                                className="w-full border p-2 pr-8 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
+                                value={(decumulationConfig.interestRate * 100).toFixed(1)} 
+                                onChange={e => setDecumulationConfig({...decumulationConfig, interestRate: Number(e.target.value)/100})} 
+                            />
+                            <span className="absolute right-3 top-2 text-gray-400 text-sm">%</span>
+                         </div>
+                    </div>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-                 <div className="border p-6 rounded-xl">
-                     <h4 className="font-bold mb-4">Seu Cenário Atual</h4>
-                     <p className="text-sm text-gray-500 mb-1">Patrimônio Acumulado (Simulado)</p>
-                     <p className="text-2xl font-bold mb-4">{patrimony.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
-                     
-                     <p className="text-sm text-gray-500 mb-1">Retirada Mensal Desejada</p>
-                     <p className="text-2xl font-bold mb-4 text-red-600">- R$ {monthlyWithdrawal.toLocaleString('pt-BR')}</p>
-                 </div>
-                 <div className="border p-6 rounded-xl bg-gray-50 flex flex-col justify-center items-center">
-                     <h4 className="font-bold text-gray-600 mb-2">Longevidade do Capital</h4>
-                     <p className="text-5xl font-bold text-blue-600">{(isNaN(yearsToZero) || yearsToZero < 0) ? '∞' : Math.floor(yearsToZero)}</p>
-                     <p className="text-gray-500">anos de duração</p>
-                     <p className="text-xs text-gray-400 mt-2 text-center max-w-xs">Considerando que o dinheiro restante continua rendendo {data.simulation.interestRateReal * 100}% a.a.</p>
-                 </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
+                    <p className="text-gray-500 font-bold uppercase text-xs tracking-wider mb-2">Para Viver de Renda (Perpetuidade)</p>
+                    <p className="text-gray-400 text-xs mb-4">Capital necessário para sacar {decumulationConfig.withdrawal.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}/mês sem reduzir o principal.</p>
+                    <p className="text-4xl font-bold text-blue-600 mb-2">{perpetuityCapital.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL', maximumFractionDigits: 0})}</p>
+                    
+                    <div className="mt-4 text-sm bg-blue-50 text-blue-700 py-1 px-3 rounded-full">
+                        Meta FIRE
+                    </div>
+                </div>
+
+                <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden">
+                    <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${yearsLasting === Infinity ? 'from-green-400 to-emerald-500' : 'from-orange-400 to-red-500'}`}></div>
+                    <p className="text-gray-500 font-bold uppercase text-xs tracking-wider mb-2">Cenário Atual</p>
+                    <p className="text-gray-400 text-xs mb-4">Com o capital de {decumulationConfig.capital.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}, quanto tempo dura?</p>
+                    
+                    <p className={`text-4xl font-bold mb-2 ${yearsLasting === Infinity ? 'text-green-600' : yearsLasting < 10 ? 'text-red-500' : 'text-orange-500'}`}>
+                        {yearsLasting === Infinity ? 'Infinito' : `${yearsLasting.toFixed(1)} Anos`}
+                    </p>
+                    
+                    <div className={`mt-4 text-sm py-1 px-3 rounded-full ${yearsLasting === Infinity ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-orange-700'}`}>
+                        {yearsLasting === Infinity 
+                            ? 'Independência Financeira Atingida! 🚀' 
+                            : 'Fase de Decumulação (Consumo) 📉'}
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -1118,100 +1465,6 @@ export default function App() {
                 </div>
             </div>
         </div>
-    );
-  };
-  
-  // PAGINA 10: CATEGORIAS (CUSTOMIZÁVEL)
-  const renderCategories = () => {
-    // Agrupa as categorias por tipo para exibição
-    const groupedCategories = data.categories.reduce((acc, cat) => {
-        if (!acc[cat.group]) acc[cat.group] = [];
-        acc[cat.group].push(cat);
-        return acc;
-    }, {} as Record<string, CategoryItem[]>);
-
-    // Ordem de exibição dos grupos
-    const groupOrder: CategoryGroup[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
-
-    return (
-      <div className="space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-end gap-4">
-              <div className="w-full">
-                  <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                     <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
-                  </h3>
-                  <p className="text-gray-500 text-sm mb-4">Adicione novas categorias para ensinar a IA a classificar melhor seus extratos. As alterações são salvas automaticamente no seu navegador.</p>
-                  
-                  <div className="flex gap-2 items-end">
-                      <div className="flex-1">
-                          <label className="text-xs font-bold text-gray-500 block mb-1">Nova Categoria</label>
-                          <input 
-                              type="text" 
-                              placeholder="Ex: Natação, Curso de Python..." 
-                              className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                              value={newCategoryName}
-                              onChange={(e) => setNewCategoryName(e.target.value)}
-                          />
-                      </div>
-                      <div className="w-40">
-                          <label className="text-xs font-bold text-gray-500 block mb-1">Grupo</label>
-                          <select 
-                             className="w-full border p-2 rounded-lg text-sm bg-white"
-                             value={newCategoryGroup}
-                             onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
-                          >
-                             {groupOrder.map(g => <option key={g} value={g}>{g}</option>)}
-                          </select>
-                      </div>
-                      <button 
-                         onClick={handleAddCategory}
-                         className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg h-[38px] w-[38px] flex items-center justify-center transition-colors"
-                         title="Adicionar"
-                      >
-                         <Plus className="w-5 h-5" />
-                      </button>
-                  </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                 <button 
-                    onClick={handleRestoreCategories}
-                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors"
-                 >
-                    <RotateCcw className="w-3 h-3" /> Restaurar Padrão
-                 </button>
-              </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             {groupOrder.map(group => {
-                 const cats = groupedCategories[group] || [];
-                 if (cats.length === 0) return null;
-
-                 return (
-                     <div key={group} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
-                         <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
-                             <h4 className="font-bold text-gray-700 text-sm">{group}</h4>
-                             <span className="text-xs text-gray-400 bg-white px-2 py-0.5 rounded border">{cats.length}</span>
-                         </div>
-                         <div className="p-4 flex flex-wrap gap-2">
-                             {cats.map(cat => (
-                                 <div key={cat.id} className="group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 hover:border-blue-300 transition-colors">
-                                     <span>{cat.name}</span>
-                                     <button 
-                                        onClick={() => handleDeleteCategory(cat.id)}
-                                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        title="Remover"
-                                     >
-                                         <X className="w-3 h-3" />
-                                     </button>
-                                 </div>
-                             ))}
-                         </div>
-                     </div>
-                 )
-             })}
-          </div>
-      </div>
     );
   };
   
@@ -1346,9 +1599,9 @@ export default function App() {
     { id: 0, title: '1. Resumo Pessoal', icon: Activity, render: renderSummary },
     { id: 1, title: '2. Orçamento', icon: Calculator, render: renderBudget },
     { id: 2, title: '3. Movimentações', icon: FileText, render: renderRealized },
-    { id: 3, title: '4. Balanço Patrimonial', icon: Layers, render: renderSimulationSummary },
+    { id: 3, title: '4. Balanço Patrimonial', icon: Layers, render: renderBalanceSheet }, // Nova função
     { id: 4, title: '5. Investimentos', icon: TrendingUp, render: renderInvestments },
-    { id: 5, title: '6. Resumo Sim.', icon: BarChart3, render: renderSimulationSummary },
+    { id: 5, title: '6. Resumo Sim.', icon: BarChart3, render: renderSimulation },
     { id: 6, title: '7. Sim. Detalhada', icon: DollarSign, render: renderDetailedSimulation },
     { id: 7, title: '8. S/ Perpetuidade', icon: Briefcase, render: renderDecumulation },
     { id: 8, title: '9. Projeção', icon: LineChart, render: renderProjectionScenarios },
@@ -1452,10 +1705,10 @@ export default function App() {
 
       {/* SUCCESS TOAST */}
       {showSuccessAlert && (
-          <div className="fixed bottom-6 right-6 z-50 animate-bounce-in max-w-sm w-full bg-white rounded-xl shadow-2xl border-l-8 border-green-500 p-5 flex items-start gap-4">
-              <CheckCircle2 className="w-6 h-6 text-green-600 mt-1" />
+          <div className={`fixed bottom-6 right-6 z-50 animate-bounce-in max-w-sm w-full bg-white rounded-xl shadow-2xl border-l-8 ${alertType === 'error' ? 'border-red-500' : 'border-green-500'} p-5 flex items-start gap-4`}>
+              {alertType === 'error' ? <AlertCircle className="w-6 h-6 text-red-600 mt-1" /> : <CheckCircle2 className="w-6 h-6 text-green-600 mt-1" />}
               <div>
-                  <h4 className="font-bold text-gray-900">Sucesso!</h4>
+                  <h4 className="font-bold text-gray-900">{alertType === 'error' ? 'Atenção' : 'Sucesso!'}</h4>
                   <p className="text-gray-600 text-sm">{successMessage}</p>
                   <button onClick={() => setShowSuccessAlert(false)} className="text-sm text-gray-400 hover:text-gray-600 mt-2">Fechar</button>
               </div>
@@ -1464,10 +1717,3 @@ export default function App() {
     </div>
   );
 }
-
-const InfoRow = ({ label, value }: { label: string, value: string | number }) => (
-  <div className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
-    <span className="text-gray-500 text-sm">{label}</span>
-    <span className="font-medium text-gray-800">{value}</span>
-  </div>
-);
