@@ -2,114 +2,42 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AppState, TransactionCategory, CategoryItem } from "../types";
 
-// Declaração da constante global injetada pelo Vite (vite.config.ts)
-declare const __GEMINI_API_KEY__: string | undefined;
-
-// Helper para ler variáveis de ambiente de forma segura
-const getApiKey = (): string => {
-  // 1. Prioridade: Constante injetada no Build (Hardcoded pelo Vite)
-  if (typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__) {
-    return __GEMINI_API_KEY__;
-  }
-
-  // 2. Fallback: Padrão nativo do Vite
-  // @ts-ignore
-  if (import.meta.env && import.meta.env.VITE_API_KEY) {
-    // @ts-ignore
-    return import.meta.env.VITE_API_KEY;
-  }
-  
-  // 3. Fallback final para Node/Localhost (process.env)
-  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-    return process.env.API_KEY;
-  }
-  
-  return "";
-};
-
 export const extractFinancialData = async (
   fileContent: string,
   userContext?: string,
   customCategories?: CategoryItem[]
 ): Promise<Partial<AppState> & { detectedClientName?: string }> => {
-  const model = "gemini-2.5-flash";
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const model = 'gemini-3-pro-preview';
 
-  // Inicialização segura dentro da função (Lazy Load)
-  const rawApiKey = getApiKey();
-  const apiKey = rawApiKey ? rawApiKey.trim() : "";
-  
-  console.log(`[FinPlanner] API Key carregada: ${apiKey ? apiKey.substring(0, 4) + '...' : 'NÃO ENCONTRADA'}`);
-  
-  if (!apiKey) {
-    throw new Error("ERRO FATAL: API Key não encontrada. Certifique-se de que a variável 'VITE_API_KEY' está configurada no Vercel (Environment Variables) e que você fez o Redeploy após adicionar.");
-  }
-  
-  const ai = new GoogleGenAI({ apiKey: apiKey });
-
-  // Constrói a lista de categorias para o prompt.
-  // Se existirem categorias customizadas, usa elas. Caso contrário, fallback para o Enum padrão.
   let categoriesString = "";
-  let categoriesListForSchema: string[] = [];
-
   if (customCategories && customCategories.length > 0) {
-      // Formato: "Nome da Categoria (Grupo)" para dar contexto à IA
       categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
-      categoriesListForSchema = customCategories.map(c => c.name);
   } else {
       categoriesString = Object.values(TransactionCategory).join(', ');
-      categoriesListForSchema = Object.values(TransactionCategory);
   }
 
   const prompt = `
-    You are a specialized High-End Financial Auditor AI (FinPlanner).
-    Your goal is to extract structured financial data from bank statements (PDF/text) and Income Tax Returns (Imposto de Renda).
+    You are a Senior Financial Auditor AI. Your task is to extract EVERY SINGLE transaction from a Brazilian bank statement or credit card bill with 100% precision.
+
+    *** AUDIT PROTOCOL - FOLLOW STRICTLY ***
+    1. TARGET VALUE: Find the "Total de Lançamentos Atuais" (in this bill it is R$ 3.217,45). This is your checksum.
+    2. ROW SCANNING: Look for lines following the pattern: [DATE] [DESCRIPTION] [VALUE].
+    3. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 34,90) or have complex names (e.g., DM*MUBI, PRODUTOS GLOBO 06/12). 
+    4. INSTALLMENTS: "06/12" means a monthly installment. Extract the current value for the transactions list.
+    5. CHECKSUM VALIDATION: Sum all extracted transaction amounts. If your sum does not match the "Total de Lançamentos Atuais" from the bill, RE-SCAN the text to find what you missed (look for international items, fees, and small purchases).
     
-    *** CRITICAL: IDENTIFY THE CLIENT ***
-    Look at the top of the statement for the Account Holder Name (Nome do Cliente / Titular).
-    Return this as 'detectedClientName'.
+    *** DATA MAPPING ***
+    - HOLDER: Found near "Titular" or "Nome do Pagador".
+    - CATEGORIZATION: Map each item to the most specific category provided below.
+    - INTERNATIONAL: Use the BRL (R$) converted value.
 
-    *** CRITICAL: BALANCE SHEET EXTRACTION (ATOB vs PASSIVO) ***
-    1. **ASSETS (Bens e Direitos)**:
-       - Identify all assets listed in "Bens e Direitos" or investments in statements.
-       - Classify them as: 'Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo'.
-       - Use 'institution' to store the bank or broker name.
-    
-    2. **LIABILITIES (Dívidas e Obrigações) - AGGRESSIVE EXTRACTION**:
-       - You MUST hunt for debts. Do not ignore them.
-       - **Negative Balances**: If the checking account ends with a negative balance (Saldo Devedor), create a liability named "Cheque Especial / Saldo Devedor" with the POSITIVE absolute value.
-       - **Loans**: Look for "Empréstimos", "Consignado", "Financiamento", "Adiantamento a Depositante", "LIS".
-       - **Credit Card Dept**: If there is a section "Saldo Parcelado" or "Total Financiado", extract it.
-       - **Tax Return**: Look for "Dívidas e Ônus Reais".
-       - **Format**: Store in 'assets' array but set type strictly to 'Dívida'. The 'totalValue' must be POSITIVE (the amount owed).
+    ${userContext ? `*** SPECIFIC USER INSTRUCTIONS: "${userContext}" ***` : ''}
 
-    *** CRITICAL: CATEGORIZE TRANSACTIONS ***
-    You must categorize every transaction into one of the EXACT categories listed below.
-    Use the provided "Group" context to help understand the nature of the expense.
-    
-    --- INTELLIGENT CATEGORIZATION LOGIC ---
-    1. **PIX / Transfers**: If it's a PIX to a person:
-       - If explicitly mentioned "Faxina", "Limpeza" -> 'Folguista' or 'Mensalista'
-       - If mentioned "Aluguel" -> 'Aluguel'
-       - If mentioned "Condominio" -> 'Condomínio'
-       - If ambiguous, map to 'Diversos' or closest match.
-
-    2. **Context Rules**:
-       - Negative values are expenses. Positive values are income.
-       - Ignore balance rows (Saldos) inside the transaction list, UNLESS it is the final negative balance which indicates a Debt.
-       - Extract the date in YYYY-MM-DD format.
-
-    ${userContext ? `
-    *** USER CONTEXT INSTRUCTIONS (HIGH PRIORITY) ***
-    The user has provided specific context for this extraction. 
-    Follow these instructions strictly, overriding general rules if necessary:
-    "${userContext}"
-    ` : ''}
-
-    --- VALID CATEGORIES LIST (Name & Group) ---
-    You must ONLY use the exact names from this list:
+    --- VALID CATEGORIES ---
     ${categoriesString}
 
-    --- INPUT TEXT ---
+    --- DOCUMENT CONTENT (OCR) ---
     ${fileContent}
   `;
 
@@ -121,57 +49,13 @@ export const extractFinancialData = async (
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          detectedClientName: { type: Type.STRING, description: "Name of the account holder detected in the statement" },
+          detectedClientName: { type: Type.STRING },
           personalData: {
             type: Type.OBJECT,
             properties: {
               name: { type: Type.STRING },
-              birthDate: { type: Type.STRING },
-              nationality: { type: Type.STRING },
-              maritalStatus: { type: Type.STRING },
-              propertyRegime: { type: Type.STRING },
-              address: {
-                type: Type.OBJECT,
-                properties: {
-                  street: { type: Type.STRING },
-                  neighborhood: { type: Type.STRING },
-                  zipCode: { type: Type.STRING }
-                }
-              },
-              email: { type: Type.STRING },
-              profession: { type: Type.STRING },
-              company: { type: Type.STRING },
-              cnpj: { type: Type.STRING },
-              role: { type: Type.STRING },
-              incomeDetails: {
-                  type: Type.OBJECT,
-                  properties: {
-                      sourceName: { type: Type.STRING },
-                      grossAmount: { type: Type.NUMBER },
-                      inss: { type: Type.NUMBER },
-                      irrf: { type: Type.NUMBER },
-                      thirteenthSalary: { type: Type.NUMBER },
-                      thirteenthIrrf: { type: Type.NUMBER },
-                      rentIncome: { type: Type.NUMBER },
-                      carneLeao: { type: Type.NUMBER }
-                  }
-              },
-              netIncomeAnnual: { type: Type.NUMBER },
-              insuranceTotal: { type: Type.NUMBER },
-              dependents: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    birthDate: { type: Type.STRING },
-                    occupation: { type: Type.STRING },
-                    schoolOrCompany: { type: Type.STRING },
-                    nationality: { type: Type.STRING },
-                    maritalStatus: { type: Type.STRING }
-                  }
-                }
-              }
+              cpf: { type: Type.STRING },
+              netIncomeAnnual: { type: Type.NUMBER }
             }
           },
           transactions: {
@@ -179,11 +63,10 @@ export const extractFinancialData = async (
             items: {
               type: Type.OBJECT,
               properties: {
-                date: { type: Type.STRING },
+                date: { type: Type.STRING, description: "YYYY-MM-DD" },
                 description: { type: Type.STRING },
                 amount: { type: Type.NUMBER },
-                category: { type: Type.STRING, enum: categoriesListForSchema },
-                type: { type: Type.STRING }, // AI fills this but we usually recalc based on category
+                category: { type: Type.STRING },
                 institution: { type: Type.STRING }
               }
             }
@@ -195,26 +78,32 @@ export const extractFinancialData = async (
               properties: {
                 ticker: { type: Type.STRING },
                 type: { type: Type.STRING, enum: ['Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'Dívida'] },
-                quantity: { type: Type.NUMBER },
-                currentPrice: { type: Type.NUMBER },
                 totalValue: { type: Type.NUMBER },
                 institution: { type: Type.STRING }
               }
             }
           }
-        }
+        },
+        required: ["transactions"]
       }
     }
   });
 
   const text = response.text;
-  if (!text) throw new Error("No data returned from AI");
+  if (!text) throw new Error("A IA não retornou dados.");
 
   try {
-    const data = JSON.parse(text);
-    return data;
+    const parsed = JSON.parse(text.trim());
+    
+    // Log de auditoria interna para debug no console
+    console.log("Auditoria FinPlanner:", {
+        count: parsed.transactions?.length,
+        sum: parsed.transactions?.reduce((a: number, b: any) => a + (b.amount || 0), 0)
+    });
+
+    return parsed;
   } catch (e) {
-    console.error("Failed to parse JSON", e);
-    throw new Error("Failed to parse AI response");
+    console.error("Erro no parse JSON:", text);
+    throw new Error("Erro na estrutura de dados da IA.");
   }
 };

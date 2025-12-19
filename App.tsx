@@ -4,10 +4,10 @@ import {
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
   UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
-  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale
+  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
-import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory } from './services/dbService';
+import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
 import { supabase } from './services/supabaseClient';
@@ -71,27 +71,11 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
 // Helper: Gera lista padrão baseada no Enum original
 const generateDefaultCategories = (): CategoryItem[] => {
     return Object.values(TransactionCategory).map(cat => ({
-        id: generateId(),
+        id: generateId(), // IDs locais temporários para defaults
         name: cat,
         group: getCategoryGroup(cat),
         isCustom: false
     }));
-};
-
-// Helper: Carrega categorias do LocalStorage de forma segura
-const loadCategoriesFromStorage = (): CategoryItem[] => {
-    try {
-        const saved = localStorage.getItem('finplanner_categories');
-        if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                return parsed;
-            }
-        }
-    } catch (e) {
-        console.error("Erro ao ler categorias:", e);
-    }
-    return generateDefaultCategories();
 };
 
 // Componente Modal de Troca de Senha
@@ -204,12 +188,11 @@ export default function App() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [activeTab, setActiveTab] = useState(11);
   
-  // INICIALIZAÇÃO DE ESTADO ROBUSTA: Carrega categorias imediatamente
+  // INICIALIZAÇÃO DE ESTADO ROBUSTA: Começa com categorias padrão
   const [data, setData] = useState<AppState>(() => {
-      const cats = loadCategoriesFromStorage();
       return {
           ...INITIAL_STATE,
-          categories: cats
+          categories: generateDefaultCategories() // Inicia com padrão, DB carrega depois
       };
   });
   
@@ -253,32 +236,6 @@ export default function App() {
     interestRate: 0.06
   });
 
-  // Listener para sincronizar abas e garantir persistência
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-        if (e.key === 'finplanner_categories' && e.newValue) {
-            try {
-                const parsed = JSON.parse(e.newValue);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    setData(prev => ({ ...prev, categories: parsed }));
-                }
-            } catch (err) {
-                console.error("Erro ao sincronizar categorias entre abas", err);
-            }
-        }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-
-  // AUTO-SAVE CATEGORIES EFFECT
-  // Garante que o LocalStorage seja atualizado sempre que o estado de categorias mudar
-  useEffect(() => {
-    if (data.categories.length > 0) {
-        localStorage.setItem('finplanner_categories', JSON.stringify(data.categories));
-    }
-  }, [data.categories]);
-
   // Sync capital de decumulação com o patrimônio do cliente carregado
   useEffect(() => {
     const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
@@ -290,11 +247,32 @@ export default function App() {
     }
   }, [data.assets]);
 
+  // Função para carregar categorias globais e mesclar com as padrão
+  const refreshCategories = async () => {
+      const globalCats = await fetchGlobalCategories();
+      const defaultCats = generateDefaultCategories();
+      // Mescla: Padrão + Globais do BD
+      setData(prev => ({
+          ...prev,
+          categories: [...defaultCats, ...globalCats]
+      }));
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoadingSession(false);
+      
       if (session?.user) {
+        // Carrega categorias GLOBAIS do banco de dados
+        refreshCategories();
+
+        // TENTA RESTAURAR CLIENTE SELECIONADO ANTERIORMENTE
+        const savedClientId = localStorage.getItem('finplanner_selected_client_id');
+        if (savedClientId) {
+             handleSelectClient(savedClientId); // Carrega os dados deste cliente
+        }
+
         if (session.user.user_metadata?.force_password_change) {
           setMustChangePassword(true);
         } else {
@@ -306,6 +284,9 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session?.user) {
+          // No login, carrega do DB global
+          refreshCategories();
+
           if (session.user.user_metadata?.force_password_change) {
             setMustChangePassword(true);
           } else {
@@ -313,8 +294,9 @@ export default function App() {
             loadClients(session.user.id);
           }
       } else {
-          // CORREÇÃO CRÍTICA: Ao resetar, preserva as categorias carregadas
-          setData(prev => ({ ...INITIAL_STATE, categories: prev.categories.length > 0 ? prev.categories : loadCategoriesFromStorage() }));
+          // No logout, volta para padrão
+          setData(prev => ({ ...INITIAL_STATE, categories: generateDefaultCategories() }));
+          localStorage.removeItem('finplanner_selected_client_id'); // Limpa cliente no logout
           setMustChangePassword(false);
       }
     });
@@ -332,6 +314,8 @@ export default function App() {
   const handleSelectClient = async (clientId: string) => {
       if (!clientId) return;
       setIsLoadingData(true);
+      localStorage.setItem('finplanner_selected_client_id', clientId); // Persiste seleção
+
       const clientData = await fetchClientData(clientId);
       if (clientData) {
           setData(prev => ({
@@ -341,7 +325,7 @@ export default function App() {
               personalData: { ...prev.personalData, ...clientData.personalData },
               lastUpdated: new Date().toISOString()
           }));
-          setActiveTab(0);
+          // Não muda a aba automaticamente no refresh, apenas no clique manual
       }
       setIsLoadingData(false);
   };
@@ -368,6 +352,9 @@ export default function App() {
               clients: prev.clients.filter(c => c.id !== id),
               selectedClientId: prev.selectedClientId === id ? null : prev.selectedClientId
           }));
+          if (data.selectedClientId === id) {
+              localStorage.removeItem('finplanner_selected_client_id');
+          }
       }
   };
 
@@ -391,55 +378,74 @@ export default function App() {
       }
   };
 
-  // --- CATEGORY MANAGEMENT HANDLERS ---
+  // --- CATEGORY MANAGEMENT HANDLERS (GLOBAL DB) ---
   
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
       if (!newCategoryName.trim()) return;
       const cleanName = newCategoryName.trim();
 
-      // Proteção: Se a lista estiver vazia (erro de carga), regenera os defaults antes de adicionar
-      let currentList = [...data.categories];
-      if (currentList.length === 0) {
-          currentList = generateDefaultCategories();
-      }
-
-      // Validação de Duplicidade (Case Insensitive)
-      if (currentList.some(c => c.name.toLowerCase() === cleanName.toLowerCase())) {
+      // Validação de Duplicidade (Case Insensitive) no Front
+      if (data.categories.some(c => c.name.toLowerCase() === cleanName.toLowerCase())) {
           setSuccessMessage(`A categoria "${cleanName}" já existe!`);
           setAlertType('error');
           setShowSuccessAlert(true);
           return;
       }
 
-      const newItem: CategoryItem = {
-          id: generateId(),
-          name: cleanName,
-          group: newCategoryGroup,
-          isCustom: true
-      };
-      
-      const updatedCategories = [...currentList, newItem];
-      
-      setData(prev => ({ ...prev, categories: updatedCategories }));
-      // O useEffect agora lida com o LocalStorage
-      
-      setNewCategoryName("");
-      setSuccessMessage("Categoria adicionada!");
-      setAlertType('success');
-      setShowSuccessAlert(true);
+      try {
+          // Cria no banco global
+          await createGlobalCategory(cleanName, newCategoryGroup);
+          
+          // Recarrega todas as categorias para sincronizar
+          await refreshCategories();
+
+          setNewCategoryName("");
+          setSuccessMessage("Categoria global criada com sucesso!");
+          setAlertType('success');
+          setShowSuccessAlert(true);
+      } catch (error) {
+          setSuccessMessage("Erro ao criar categoria global. Verifique o banco de dados.");
+          setAlertType('error');
+          setShowSuccessAlert(true);
+      }
   };
 
-  const handleDeleteCategory = (id: string) => {
-      if (!confirm("Tem certeza que deseja remover esta categoria?")) return;
+  const handleDeleteCategory = async (id: string) => {
+      // Confirmação direta, sem setTimeout para evitar bloqueio do navegador
+      const confirmed = window.confirm("Tem certeza que deseja remover esta categoria global? Isso afetará todos os usuários.");
+      if (!confirmed) return;
       
-      const updatedCategories = data.categories.filter(c => c.id !== id);
-      setData(prev => ({ ...prev, categories: updatedCategories }));
+      console.log("Iniciando exclusão de categoria:", id);
+      
+      // 1. Otimistic Update: Remove da UI imediatamente
+      const previousCategories = [...data.categories];
+      setData(prev => ({
+          ...prev,
+          categories: prev.categories.filter(c => c.id !== id)
+      }));
+      
+      try {
+          // 2. Tenta deletar do banco
+          await deleteGlobalCategory(id);
+          console.log("Categoria excluída com sucesso do DB");
+      } catch (error) {
+          // 3. Rollback em caso de erro
+          console.error("Erro ao excluir:", error);
+          alert("Erro ao excluir categoria. Verifique se você tem permissão ou conexão com o banco de dados.");
+          // Restaura o estado anterior
+          setData(prev => ({ ...prev, categories: previousCategories }));
+      }
   };
 
   const handleRestoreCategories = () => {
-      if (!confirm("Isso irá apagar todas as categorias personalizadas e restaurar o padrão. Continuar?")) return;
-      const defaults = generateDefaultCategories();
-      setData(prev => ({ ...prev, categories: defaults }));
+      // Como o sistema agora é global, "Restaurar" significaria apagar TUDO do banco global? 
+      // Isso pode ser perigoso. Vamos apenas recarregar os dados do banco.
+      if (confirm("Isso irá recarregar a lista de categorias do servidor. Continuar?")) {
+          refreshCategories();
+          setSuccessMessage("Categorias sincronizadas com o servidor.");
+          setAlertType('success');
+          setShowSuccessAlert(true);
+      }
   };
 
   const handleLogout = async () => {
@@ -566,6 +572,7 @@ export default function App() {
 
             if (item.id === pendingItems[pendingItems.length - 1].id) {
                  handleSelectClient(targetClientId);
+                 // Não força mudança de aba para não atrapalhar a UX se o usuário estiver vendo outra coisa
             }
 
         } catch (error: any) {
@@ -619,7 +626,7 @@ export default function App() {
                                   {client.name.charAt(0)}
                               </div>
                               <div className="flex gap-2">
-                                  <button onClick={() => handleSelectClient(client.id)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-100 font-medium">
+                                  <button onClick={() => { handleSelectClient(client.id); setActiveTab(0); }} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-100 font-medium">
                                       Acessar
                                   </button>
                                   <button onClick={(e) => { e.stopPropagation(); handleDeleteClient(client.id, client.name); }} className="text-gray-400 hover:text-red-500 p-1">
@@ -835,6 +842,17 @@ export default function App() {
   };
 
   const renderRealized = () => {
+    // Se nenhum cliente estiver selecionado, avisa o usuário
+    if (!data.selectedClientId) {
+        return (
+            <div className="bg-white p-12 rounded-xl border border-dashed border-gray-300 text-center">
+                <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Nenhum cliente selecionado</h3>
+                <p className="text-gray-500 mt-2">Selecione um cliente na aba 'Clientes' para visualizar as movimentações.</p>
+            </div>
+        );
+    }
+
     // Garante que SEMPRE existam categorias para exibir
     const currentCategories = data.categories.length > 0 ? data.categories : generateDefaultCategories();
     const sortedCategories = [...currentCategories].sort((a, b) => a.name.localeCompare(b.name));
@@ -1089,9 +1107,9 @@ export default function App() {
               <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
                 <div className="w-full">
                     <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                        <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias
+                        <Settings className="w-5 h-5 text-gray-500"/> Gerenciamento de Categorias Globais
                     </h3>
-                    <p className="text-gray-500 text-sm mb-4">Ensine a IA a classificar melhor seus extratos. Adicione categorias personalizadas aqui.</p>
+                    <p className="text-gray-500 text-sm mb-4">Adicione categorias personalizadas disponíveis para TODOS os usuários e clientes.</p>
                     
                     {/* ADICIONAR NOVA CATEGORIA */}
                     <div className="flex gap-2 items-end mb-4 md:mb-0">
@@ -1128,9 +1146,9 @@ export default function App() {
                 <div className="flex flex-col gap-2 w-full md:w-auto items-end">
                     <button 
                         onClick={handleRestoreCategories}
-                        className="text-xs text-red-500 hover:text-red-700 flex items-center justify-center gap-1 border border-red-200 px-3 py-2 rounded-lg hover:bg-red-50 transition-colors w-full md:w-auto"
+                        className="text-xs text-blue-500 hover:text-blue-700 flex items-center justify-center gap-1 border border-blue-200 px-3 py-2 rounded-lg hover:bg-blue-50 transition-colors w-full md:w-auto"
                     >
-                        <RotateCcw className="w-3 h-3" /> Restaurar Padrão
+                        <RotateCcw className="w-3 h-3" /> Sincronizar
                     </button>
                 </div>
               </div>
@@ -1149,15 +1167,22 @@ export default function App() {
                          </div>
                          <div className="p-4 flex flex-wrap gap-2">
                              {cats.map(cat => (
-                                 <div key={cat.id} className="group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 hover:border-blue-300 transition-colors">
+                                 <div key={cat.id} className={`group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 ${cat.isCustom ? 'border-blue-200 bg-blue-50' : ''} hover:border-blue-300 transition-colors`}>
                                      <span>{cat.name}</span>
-                                     <button 
-                                        onClick={() => handleDeleteCategory(cat.id)}
-                                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        title="Remover"
-                                     >
-                                         <X className="w-3 h-3" />
-                                     </button>
+                                     {cat.isCustom && (
+                                         <button 
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation(); // Importante para não fechar acordeons ou disparar pais
+                                                handleDeleteCategory(cat.id);
+                                            }}
+                                            className="ml-1 z-10 relative cursor-pointer text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors p-2 flex items-center justify-center"
+                                            title="Remover (Global)"
+                                         >
+                                             <X className="w-4 h-4 pointer-events-none" />
+                                         </button>
+                                     )}
                                  </div>
                              ))}
                          </div>
@@ -1423,10 +1448,21 @@ export default function App() {
   };
 
   const renderProjectionScenarios = () => {
+    // Cálculo do Patrimônio Líquido Real (Fallback)
+    const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalAssets = data.assets.filter(a => a.type !== 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const netWorth = totalAssets - liabilities;
+
+    // Estimativa de Aporte (Fallback - 20% da renda mensal)
+    const estimatedMonthlySave = data.personalData.netIncomeAnnual ? (data.personalData.netIncomeAnnual / 12 * 0.2) : 0;
+
     const years = data.simulation.years || 30;
-    const initial = data.simulation.initialPatrimony || 0;
     
-    if (initial === 0 && data.simulation.monthlyContribution === 0) {
+    // Usa o valor da simulação manual OU o cálculo real como fallback
+    const initial = data.simulation.initialPatrimony || netWorth;
+    const monthlyContribution = data.simulation.monthlyContribution || estimatedMonthlySave;
+    
+    if (initial <= 0 && monthlyContribution <= 0) {
         return (
             <div className="bg-white p-12 rounded-xl border border-dashed text-center">
                 <LineChart className="w-12 h-12 text-gray-300 mx-auto mb-4" />
@@ -1440,7 +1476,7 @@ export default function App() {
     let p = initial; // Pessimista (4%)
     let r = initial; // Realista (6%)
     let o = initial; // Otimista (10%)
-    const contrib = data.simulation.monthlyContribution * 12;
+    const contrib = monthlyContribution * 12; // Anualiza o aporte
 
     for(let y=0; y<=years; y++) {
         dataPoints.push({
@@ -1632,17 +1668,28 @@ export default function App() {
       {mustChangePassword && <ForcePasswordChangeModal onClose={() => window.location.reload()} />}
 
       <aside className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-blue-900 text-white flex flex-col fixed h-full z-10 transition-all duration-300 overflow-y-auto custom-scrollbar`}>
-        <div className={`p-6 border-b border-blue-800 flex items-center ${isSidebarExpanded ? 'justify-between' : 'justify-center'}`}>
+        <div className={`p-6 border-b border-blue-800 flex items-center ${isSidebarExpanded ? 'justify-start gap-3' : 'justify-center'}`}>
+           <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-900/50">
+                <BrainCircuit className="w-6 h-6 text-white" />
+           </div>
           {isSidebarExpanded && (
             <div>
-              <h1 className="text-xl font-bold text-white">FinPlanner</h1>
-              <p className="text-xs text-blue-200 mt-1">Consultoria Digital</p>
+              <h1 className="text-xl font-bold text-white leading-none">FinPlanner</h1>
+              <p className="text-[10px] text-blue-200 mt-1 uppercase tracking-wider">Consultoria AI</p>
             </div>
           )}
-          <button onClick={() => setIsSidebarExpanded(!isSidebarExpanded)} className="text-blue-200 hover:text-white p-1 rounded hover:bg-blue-800 transition-colors">
-            {isSidebarExpanded ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-6 h-6" />}
+          <button onClick={() => setIsSidebarExpanded(!isSidebarExpanded)} className="ml-auto text-blue-200 hover:text-white p-1 rounded hover:bg-blue-800 transition-colors">
+            {isSidebarExpanded ? <ChevronLeft className="w-5 h-5" /> : null}
           </button>
         </div>
+        {!isSidebarExpanded && (
+            <div className="flex justify-center py-2 border-b border-blue-800">
+                <button onClick={() => setIsSidebarExpanded(true)} className="text-blue-200 hover:text-white">
+                    <Menu className="w-6 h-6" />
+                </button>
+            </div>
+        )}
+
         <nav className="flex-1 p-4 space-y-1">
           {TABS.map((tab) => {
             const Icon = tab.icon;
@@ -1676,13 +1723,11 @@ export default function App() {
           <div>
             <h2 className="text-2xl font-bold text-gray-800">{TABS[activeTab].title}</h2>
             {/* Ocultar subtítulo apenas na página 3 (ID 2) */}
-            {activeTab !== 2 && (
-                <p className="text-sm text-gray-500 mt-1">
-                    {data.selectedClientId 
-                      ? `Cliente Selecionado: ${data.personalData.name}` 
-                      : 'Selecione um cliente na aba 12 ou faça upload.'}
-                </p>
-            )}
+            <p className="text-sm text-gray-500 mt-1">
+                {data.selectedClientId 
+                  ? `Cliente Selecionado: ${data.personalData.name}` 
+                  : 'Selecione um cliente na aba 12 ou faça upload.'}
+            </p>
           </div>
           <div className="flex items-center gap-4">
              {/* CLIENT SELECTOR HEADER */}

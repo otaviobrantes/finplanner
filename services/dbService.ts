@@ -1,6 +1,6 @@
 
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { AppState, Client } from '../types';
+import { AppState, Client, CategoryItem } from '../types';
 
 // --- GESTÃO DE CLIENTES (CONSULTOR) ---
 
@@ -51,6 +51,67 @@ export const updateTransactionCategory = async (transactionId: string, newCatego
 
     if (error) {
         console.error('Erro ao atualizar categoria:', error);
+        throw error;
+    }
+};
+
+// --- PERSISTÊNCIA GLOBAL DE CATEGORIAS (TODO O SISTEMA) ---
+
+export const fetchGlobalCategories = async (): Promise<CategoryItem[]> => {
+    if (!isSupabaseConfigured()) return [];
+
+    // Busca categorias personalizadas criadas por qualquer usuário na tabela GLOBAL
+    const { data, error } = await supabase
+        .from('global_categories')
+        .select('*')
+        .order('name');
+
+    if (error) {
+        console.error("Erro ao buscar categorias globais:", error);
+        return [];
+    }
+
+    // Mapeia para o formato CategoryItem
+    return data.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        group: item.category_group, // Mapeia da coluna do banco (snake_case) para o tipo (camelCase) se necessário
+        isCustom: true
+    }));
+};
+
+export const createGlobalCategory = async (name: string, group: string): Promise<CategoryItem | null> => {
+    if (!isSupabaseConfigured()) return null;
+
+    const { data, error } = await supabase
+        .from('global_categories')
+        .insert({ name: name, category_group: group })
+        .select()
+        .single();
+
+    if (error) {
+        console.error("Erro ao criar categoria global:", error);
+        throw error;
+    }
+
+    return {
+        id: data.id,
+        name: data.name,
+        group: data.category_group,
+        isCustom: true
+    };
+};
+
+export const deleteGlobalCategory = async (id: string) => {
+    if (!isSupabaseConfigured()) return;
+
+    const { error } = await supabase
+        .from('global_categories')
+        .delete()
+        .eq('id', id);
+
+    if (error) {
+        console.error("Erro ao excluir categoria global:", error);
         throw error;
     }
 };
