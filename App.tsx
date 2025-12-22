@@ -1,4 +1,12 @@
 
+/**
+ * POLÍTICA DE LAYOUT IMUTÁVEL - NÃO ALTERAR NADA VISUAL
+ * 1. Sidebar: #1e3a8a
+ * 2. Menu: Numerado 1 a 12
+ * 3. Fonte: Inter / Sans
+ * 4. Header: Botão 'Selecionar Cliente' arredondado (pills)
+ */
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart3, TrendingUp, DollarSign,  
@@ -37,6 +45,9 @@ const generateId = () => Math.random().toString(36).substring(2, 9) + Date.now()
 const getCategoryGroup = (cat: string): CategoryGroup => {
   const lowerCat = cat.toLowerCase();
 
+  // 0. Pagamento de Cartão (Deve ser neutro para não duplicar gastos no Orçamento)
+  if (lowerCat === 'cartão de crédito' || lowerCat.includes('pagamento fatura') || lowerCat.includes('liquidação cartão')) return 'Pagamentos' as any;
+
   // Receitas (Prioridade alta para evitar conflito com Aluguel despesa)
   if (lowerCat.includes('salário') || lowerCat.includes('receita') || lowerCat.includes('dividendo') || lowerCat.includes('aluguéis') || lowerCat.includes('entradas') || lowerCat.includes('restituição')) return 'Receitas';
 
@@ -52,8 +63,8 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
   // Presentes
   if (lowerCat.includes('presente') || lowerCat.includes('festa')) return 'Presentes';
   
-  // Financeiro
-  if (lowerCat.includes('seguro') || lowerCat.includes('juros') || lowerCat.includes('doaç') || lowerCat.includes('planejador') || lowerCat.includes('cartão') || lowerCat.includes('iof') || lowerCat.includes('taxa')) return 'Financeiro';
+  // Financeiro (Removido 'cartão' daqui para evitar duplicidade no grupo financeiro)
+  if (lowerCat.includes('seguro') || lowerCat.includes('juros') || lowerCat.includes('doaç') || lowerCat.includes('planejador') || lowerCat.includes('iof') || lowerCat.includes('taxa')) return 'Financeiro';
   
   // Extra
   if (lowerCat.includes('consultora') || lowerCat.includes('arrumação') || lowerCat.includes('costureira')) return 'Extra';
@@ -752,7 +763,9 @@ export default function App() {
         return custom ? custom.group : getCategoryGroup(cat);
     };
 
-    const distinctGroups = Array.from(new Set(data.transactions.map(t => getGroupForChart(t.category))));
+    // Filtrar grupos que não devem ser contabilizados no somatório de gastos (Pagamentos de Fatura)
+    const distinctGroups = Array.from(new Set(data.transactions.map(t => getGroupForChart(t.category))))
+        .filter(g => g !== ('Pagamentos' as any));
     
     const preferredOrder = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
     
@@ -785,6 +798,7 @@ export default function App() {
             <div className="h-64">
                 <ExpensesBarChart data={chartData} />
             </div>
+            <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold tracking-wider">* Pagamento de cartão ignorado no gráfico para evitar duplicidade de gastos.</p>
         </div>
         
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
@@ -857,11 +871,14 @@ export default function App() {
     const currentCategories = data.categories.length > 0 ? data.categories : generateDefaultCategories();
     const sortedCategories = [...currentCategories].sort((a, b) => a.name.localeCompare(b.name));
 
+    // Lógica do filtro de data: Compara strings ISO e ordena cronologicamente
     const filteredTransactions = data.transactions.filter(t => {
-      if (dateRange.start && t.date < dateRange.start) return false;
-      if (dateRange.end && t.date > dateRange.end) return false;
+      if (!t.date) return true;
+      const tDate = t.date.substring(0, 10); // Garante YYYY-MM-DD
+      if (dateRange.start && tDate < dateRange.start) return false;
+      if (dateRange.end && tDate > dateRange.end) return false;
       return true;
-    });
+    }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
     return (
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -911,7 +928,9 @@ export default function App() {
         <div className="divide-y max-h-[600px] overflow-y-auto">
             {filteredTransactions.map(t => (
                 <div key={t.id} className="p-4 grid grid-cols-12 gap-2 hover:bg-gray-50 text-sm items-center group">
-                    <div className="col-span-2 text-gray-600">{t.date}</div>
+                    <div className="col-span-2 text-gray-600">
+                        {t.date ? t.date.split('-').reverse().join('/') : '-'}
+                    </div>
                     <div className="col-span-4 truncate pr-2 font-medium text-gray-700" title={t.description}>
                         {t.description}
                     </div>
