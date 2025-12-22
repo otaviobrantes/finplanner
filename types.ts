@@ -1,4 +1,5 @@
 
+
 export enum TransactionCategory {
   // 2.2 SAÍDAS - POR CATEGORIA
   
@@ -122,7 +123,7 @@ export enum TransactionCategory {
   INCOME_TAX_REFUND = 'Restituição IR'
 }
 
-export type CategoryGroup = 'Essencial' | 'Extra' | 'Financeiro' | 'Presentes' | 'Profissional' | 'Saúde' | 'Social' | 'Transporte' | 'Receitas' | 'Outros';
+export type CategoryGroup = string;
 
 export interface Client {
   id: string;

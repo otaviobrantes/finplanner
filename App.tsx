@@ -1,8 +1,9 @@
 
+
 /**
  * POLÍTICA DE LAYOUT IMUTÁVEL - NÃO ALTERAR NADA VISUAL
  * 1. Sidebar: #1e3a8a
- * 2. Menu: Numerado 1 a 12
+ * 2. Menu: Numerado 1 a 12 (Agora 1 a 13)
  * 3. Fonte: Inter / Sans
  * 4. Header: Botão 'Selecionar Cliente' arredondado (pills)
  */
@@ -12,16 +13,17 @@ import {
   BarChart3, TrendingUp, DollarSign,  
   FileText, Briefcase, Calculator, LineChart, Layers, 
   UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
-  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit
+  ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
 import { supabase } from './services/supabaseClient';
-import { AppState, INITIAL_STATE, TransactionCategory, CategoryGroup, Client, CategoryItem } from './types';
+import { AppState, INITIAL_STATE, TransactionCategory, CategoryGroup, Client, CategoryItem, Transaction } from './types';
 import { PatrimonyChart, AllocationChart, ExpensesBarChart, ScenarioChart } from './components/FinancialCharts';
 import { Auth } from './components/Auth';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 // Declaração global para checagem de debug
 declare const __GEMINI_API_KEY__: string | undefined;
@@ -247,6 +249,14 @@ export default function App() {
     interestRate: 0.06
   });
 
+  // --- ESTADO PARA EDIÇÃO MANUAL NO FLUXO (PÁGINA 13) ---
+  const [cashFlowEditMode, setCashFlowEditMode] = useState(false);
+  const [manualIncomes, setManualIncomes] = useState<Record<string, number>>({});
+  const [groupBudgets, setGroupBudgets] = useState<Record<string, number>>({}); 
+  const [isSavingCashFlow, setIsSavingCashFlow] = useState(false);
+  const [isAddingManualGroup, setIsAddingManualGroup] = useState(false);
+  const [newManualGroupName, setNewManualGroupName] = useState("");
+
   // Sync capital de decumulação com o patrimônio do cliente carregado
   useEffect(() => {
     const liabilities = data.assets.filter(a => a.type === 'Dívida').reduce((acc, curr) => acc + curr.totalValue, 0);
@@ -281,7 +291,7 @@ export default function App() {
         // TENTA RESTAURAR CLIENTE SELECIONADO ANTERIORMENTE
         const savedClientId = localStorage.getItem('finplanner_selected_client_id');
         if (savedClientId) {
-             handleSelectClient(savedClientId); // Carrega os dados deste cliente
+             handleSelectClient(savedClientId); // Carrega os dos deste cliente
         }
 
         if (session.user.user_metadata?.force_password_change) {
@@ -336,7 +346,14 @@ export default function App() {
               personalData: { ...prev.personalData, ...clientData.personalData },
               lastUpdated: new Date().toISOString()
           }));
-          // Não muda a aba automaticamente no refresh, apenas no clique manual
+          // Reseta edições manuais ao trocar de cliente
+          setManualIncomes({});
+          setCashFlowEditMode(false);
+          
+          // Carregar budgets salvos do cliente (simulado por enquanto no localStorage ou via metadata futuro)
+          const savedBudgets = localStorage.getItem(`budgets_${clientId}`);
+          if (savedBudgets) setGroupBudgets(JSON.parse(savedBudgets));
+          else setGroupBudgets({});
       }
       setIsLoadingData(false);
   };
@@ -597,6 +614,81 @@ export default function App() {
     setSuccessMessage("Fila processada! Verifique o status de cada arquivo.");
     setAlertType('success');
     setShowSuccessAlert(true);
+  };
+
+  // --- HANDLERS PARA EDIÇÃO MANUAL DO FLUXO ---
+
+  const handleManualIncomeChange = (monthKey: string, newValue: number) => {
+      setManualIncomes(prev => ({ ...prev, [monthKey]: newValue }));
+  };
+
+  const handleGroupBudgetChange = (group: string, value: number) => {
+      const newBudgets = { ...groupBudgets, [group]: value };
+      setGroupBudgets(newBudgets);
+      if (data.selectedClientId) {
+          localStorage.setItem(`budgets_${data.selectedClientId}`, JSON.stringify(newBudgets));
+      }
+  };
+
+  const handleSaveManualCashFlow = async (monthlyDataMap: Record<string, { income: number; expenses: number }>) => {
+      if (!data.selectedClientId || !session?.user) return;
+      
+      setIsSavingCashFlow(true);
+      const newAdjustmentTransactions: Transaction[] = [];
+
+      try {
+          for (const [monthKey, newValue] of Object.entries(manualIncomes)) {
+              const currentIncome = monthlyDataMap[monthKey]?.income || 0;
+              const adjustment = newValue - currentIncome;
+
+              if (Math.abs(adjustment) < 0.01) continue;
+
+              // Cria uma transação de ajuste para este mês
+              newAdjustmentTransactions.push({
+                  id: generateId(),
+                  date: `${monthKey}-01`, // Primeiro dia do mês
+                  description: `Ajuste Manual de Receita - ${monthKey.split('-').reverse().join('/')}`,
+                  amount: adjustment,
+                  category: TransactionCategory.INCOME_OTHER,
+                  type: 'Receitas',
+                  institution: 'Ajuste Manual'
+              });
+          }
+
+          if (newAdjustmentTransactions.length > 0) {
+              const saveResult = await saveFinancialData(session.user.id, data.selectedClientId, {
+                  transactions: [...data.transactions, ...newAdjustmentTransactions]
+              });
+
+              if (saveResult.success) {
+                  setSuccessMessage("Entradas atualizadas com sucesso!");
+                  setAlertType('success');
+                  setShowSuccessAlert(true);
+                  // Recarrega os dados do cliente para refletir as novas transações
+                  handleSelectClient(data.selectedClientId);
+              } else {
+                  throw new Error(saveResult.error?.message || "Erro ao salvar ajustes");
+              }
+          }
+      } catch (err: any) {
+          setSuccessMessage(err.message || "Falha ao salvar edições manuais.");
+          setAlertType('error');
+          setShowSuccessAlert(true);
+      } finally {
+          setIsSavingCashFlow(false);
+          setCashFlowEditMode(false);
+          setManualIncomes({});
+      }
+  };
+
+  const handleConfirmManualGroup = () => {
+    if (!newManualGroupName.trim()) return;
+    const name = newManualGroupName.trim();
+    if (!groupBudgets[name]) {
+        handleGroupBudgetChange(name, 0);
+    }
+    setNewManualGroupName("");
+    setIsAddingManualGroup(false);
   };
 
   // --- RENDERERS ---
@@ -1033,6 +1125,7 @@ export default function App() {
                                  {liabilities.map((item, idx) => (
                                      <tr key={idx} className="hover:bg-gray-50">
                                          <td className="p-4 font-medium text-gray-900">{item.ticker}</td>
+                                         <td className="p-4 text-gray-500">{item.type}</td>
                                          <td className="p-4 text-gray-500">{item.institution}</td>
                                          <td className="p-4 text-right font-bold text-red-600">{item.totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</td>
                                      </tr>
@@ -1149,7 +1242,7 @@ export default function App() {
                                 value={newCategoryGroup}
                                 onChange={(e) => setNewCategoryGroup(e.target.value as CategoryGroup)}
                             >
-                                {defaultGroupOrder.map(g => <option key={g} value={g}>{g}</option>)}
+                                {finalGroupOrder.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
                         <button 
@@ -1535,6 +1628,331 @@ export default function App() {
         </div>
     );
   };
+
+  const renderCashFlow = () => {
+    if (data.transactions.length === 0) {
+        return (
+            <div className="bg-white p-12 rounded-xl border border-dashed border-gray-300 text-center">
+                <ArrowRightLeft className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Sem dados de fluxo financeiro</h3>
+                <p className="text-gray-500 mt-2">O fluxo financeiro é gerado a partir das transações importadas na aba 11.</p>
+            </div>
+        );
+    }
+
+    // Processamento de dados mensais consolidados e por grupo
+    const monthlyDataMap: Record<string, { income: number; expenses: number }> = {};
+    const monthlyCategoryMatrix: Record<string, Record<string, number>> = {};
+    const categoryGroupsSet = new Set<string>(Object.keys(groupBudgets)); // Começa com grupos que já têm orçamento planejado
+
+    data.transactions.forEach(t => {
+        if (!t.date) return;
+        const monthKey = t.date.substring(0, 7); // YYYY-MM
+        if (!monthlyDataMap[monthKey]) {
+            monthlyDataMap[monthKey] = { income: 0, expenses: 0 };
+        }
+        if (!monthlyCategoryMatrix[monthKey]) {
+            monthlyCategoryMatrix[monthKey] = {};
+        }
+
+        const group = data.categories.find(c => c.name === t.category)?.group || getCategoryGroup(t.category);
+        
+        if (group === 'Receitas') {
+            monthlyDataMap[monthKey].income += t.amount;
+        } else if (group !== ('Pagamentos' as any)) {
+            monthlyDataMap[monthKey].expenses += Math.abs(t.amount);
+            
+            // Adiciona ao detalhamento por grupo
+            const groupName = group as string;
+            categoryGroupsSet.add(groupName);
+            monthlyCategoryMatrix[monthKey][groupName] = (monthlyCategoryMatrix[monthKey][groupName] || 0) + Math.abs(t.amount);
+        }
+    });
+
+    // Ordenação dos meses
+    const sortedMonths = Object.keys(monthlyDataMap).sort();
+    const sortedCategoryGroups = Array.from(categoryGroupsSet).sort();
+
+    const chartData = sortedMonths.map((month) => {
+            const values = monthlyDataMap[month];
+            const incomeValue = manualIncomes[month] !== undefined ? manualIncomes[month] : values.income;
+            
+            return {
+                id: month,
+                name: month.split('-').reverse().join('/'),
+                entradas: incomeValue,
+                saidas: values.expenses,
+                resultado: incomeValue - values.expenses,
+                isEdited: manualIncomes[month] !== undefined
+            };
+        });
+
+    const totalIncome = chartData.reduce((acc, curr) => acc + curr.entradas, 0);
+    const totalExpenses = chartData.reduce((acc, curr) => acc + curr.saidas, 0);
+    const averageMargin = chartData.length > 0 ? (totalIncome - totalExpenses) / (totalIncome || 1) * 100 : 0;
+
+    return (
+        <div className="space-y-8 animate-fade-in-up pb-20">
+            {/* CARDS DE RESUMO */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center">
+                        <TrendingUp className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Total Entradas</p>
+                        <p className="text-xl font-bold text-green-600">{totalIncome.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center">
+                        <TrendingDown className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Total Saídas</p>
+                        <p className="text-xl font-bold text-red-600">{totalExpenses.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                        <Scale className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Margem Média</p>
+                        <p className="text-xl font-bold text-blue-600">{averageMargin.toFixed(1)}%</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* GRÁFICO DE LINHAS E BARRAS */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-blue-500" /> Fluxo Mensal Consolidado
+                </h3>
+                <div className="h-80 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                            <XAxis dataKey="name" tick={{fontSize: 12}} />
+                            <YAxis tickFormatter={(val) => `R$${(val/1000).toFixed(0)}k`} />
+                            <Tooltip formatter={(val: number) => val.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})} />
+                            <Legend />
+                            <Bar dataKey="entradas" name="Entradas" fill="#10B981" radius={[4, 4, 0, 0]} barSize={35} />
+                            <Bar dataKey="saidas" name="Saídas" fill="#EF4444" radius={[4, 4, 0, 0]} barSize={35} />
+                            <Line type="monotone" dataKey="resultado" name="Resultado Líquido" stroke="#3B82F6" strokeWidth={3} dot={{r: 4, fill: '#3B82F6'}} />
+                        </ComposedChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+
+            {/* TABELA CONSOLIDADA COM EDIÇÃO MANUAL */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                    <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                        <ArrowRightLeft className="w-4 h-4 text-blue-600" /> Fluxo de Caixa Mensal
+                    </h4>
+                    <div className="flex items-center gap-4">
+                        <button 
+                            onClick={() => {
+                                if (cashFlowEditMode) setManualIncomes({});
+                                setCashFlowEditMode(!cashFlowEditMode);
+                            }}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${cashFlowEditMode ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                        >
+                            {cashFlowEditMode ? <X className="w-3 h-3" /> : <Edit2 className="w-3 h-3" />}
+                            {cashFlowEditMode ? 'Cancelar Edição' : 'Habilitar Edição de Entradas'}
+                        </button>
+
+                        {cashFlowEditMode && Object.keys(manualIncomes).length > 0 && (
+                            <button 
+                                onClick={() => handleSaveManualCashFlow(monthlyDataMap)}
+                                disabled={isSavingCashFlow}
+                                className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold shadow-sm disabled:opacity-50"
+                            >
+                                {isSavingCashFlow ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                Salvar Entradas
+                            </button>
+                        )}
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-[10px] tracking-widest">
+                            <tr>
+                                <th className="p-4">Período</th>
+                                <th className="p-4 text-right">Entradas (R$)</th>
+                                <th className="p-4 text-right">Saídas (R$)</th>
+                                <th className="p-4 text-right">Resultado (R$)</th>
+                                <th className="p-4 text-right">Margem (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {[...chartData].reverse().map((row, idx) => {
+                                const margin = (row.entradas > 0) ? (row.resultado / row.entradas * 100) : 0;
+                                return (
+                                    <tr key={idx} className={`hover:bg-gray-50 transition-colors ${row.isEdited ? 'bg-blue-50/30' : ''}`}>
+                                        <td className="p-4 font-medium text-gray-700 flex items-center gap-2">
+                                            {row.name}
+                                            {row.isEdited && <span className="text-[9px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold uppercase">Manual</span>}
+                                        </td>
+                                        <td className="p-4 text-right">
+                                            {cashFlowEditMode ? (
+                                                <div className="flex justify-end items-center gap-1">
+                                                    <span className="text-gray-400 text-xs">R$</span>
+                                                    <input 
+                                                        type="number" 
+                                                        step="0.01"
+                                                        className="w-32 border border-blue-200 rounded px-2 py-1 text-right focus:ring-2 focus:ring-blue-500 outline-none font-bold text-green-600"
+                                                        value={manualIncomes[row.id] !== undefined ? manualIncomes[row.id] : row.entradas}
+                                                        onChange={(e) => handleManualIncomeChange(row.id, parseFloat(e.target.value) || 0)}
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <span className="text-green-600 font-medium">{row.entradas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                                            )}
+                                        </td>
+                                        <td className="p-4 text-right text-red-500 font-medium">{row.saidas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
+                                        <td className={`p-4 text-right font-bold ${row.resultado >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>{row.resultado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</td>
+                                        <td className={`p-4 text-right font-bold ${margin >= 20 ? 'text-green-600' : margin >= 0 ? 'text-blue-500' : 'text-red-500'}`}>
+                                            {margin.toFixed(1)}%
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* SEÇÃO: DETALHAMENTO MENSAL POR CATEGORIA COM COLUNA ORÇADO */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                    <div className="flex items-center gap-4">
+                        <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                            <LayoutGrid className="w-4 h-4 text-indigo-600" /> Detalhamento de Saídas por Grupo
+                        </h4>
+                        
+                        {/* BOTÃO PARA ADICIONAR GRUPO MANUALMENTE */}
+                        {isAddingManualGroup ? (
+                            <div className="flex items-center gap-1 animate-fade-in">
+                                <input 
+                                    autoFocus
+                                    type="text" 
+                                    className="border rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-blue-500" 
+                                    placeholder="Nome do grupo..."
+                                    value={newManualGroupName}
+                                    onChange={(e) => setNewManualGroupName(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleConfirmManualGroup()}
+                                />
+                                <button onClick={handleConfirmManualGroup} className="p-1 bg-green-100 text-green-600 rounded hover:bg-green-200">
+                                    <Check className="w-3 h-3" />
+                                </button>
+                                <button onClick={() => setIsAddingManualGroup(false)} className="p-1 bg-red-100 text-red-600 rounded hover:bg-red-200">
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ) : (
+                            <button 
+                                onClick={() => setIsAddingManualGroup(true)}
+                                className="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2 py-1 rounded flex items-center gap-1 hover:bg-blue-100 transition-colors font-bold uppercase tracking-wider"
+                            >
+                                <Plus className="w-3 h-3" /> Adicionar Grupo
+                            </button>
+                        )}
+                    </div>
+                    <div className="text-[10px] text-gray-400 uppercase font-bold tracking-widest flex items-center gap-1">
+                        <Target className="w-3 h-3" /> Metas do Consultor
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-gray-600 font-bold uppercase text-[10px] tracking-widest">
+                            <tr>
+                                <th className="p-4 sticky left-0 bg-gray-50 z-10 border-r min-w-[150px]">Grupo</th>
+                                <th className="p-4 bg-indigo-50/50 text-indigo-700 min-w-[140px] text-center border-r">Orçado (Mensal)</th>
+                                {sortedMonths.map(month => (
+                                    <th key={month} className="p-4 text-right whitespace-nowrap">{month.split('-').reverse().join('/')}</th>
+                                ))}
+                                <th className="p-4 text-right border-l font-black bg-gray-100">Média Real</th>
+                                <th className="p-4 text-right border-l font-black bg-gray-100">Desvio</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {sortedCategoryGroups.map(group => {
+                                let totalRow = 0;
+                                sortedMonths.forEach(m => totalRow += (monthlyCategoryMatrix[m][group] || 0));
+                                const avgReal = totalRow / (sortedMonths.length || 1);
+                                const budgeted = groupBudgets[group] || 0;
+                                const variance = budgeted > 0 ? (avgReal - budgeted) : 0;
+
+                                return (
+                                    <tr key={group} className="hover:bg-gray-50 transition-colors group/row">
+                                        <td className="p-4 font-bold text-gray-700 sticky left-0 bg-white border-r group-hover/row:bg-gray-50">{group}</td>
+                                        <td className="p-2 bg-indigo-50/20 border-r">
+                                            <div className="flex items-center gap-1 px-2">
+                                                <span className="text-[10px] text-indigo-400">R$</span>
+                                                <input 
+                                                    type="number"
+                                                    className="w-full bg-transparent border-b border-indigo-100 focus:border-indigo-500 outline-none text-right font-bold text-indigo-700 p-1"
+                                                    placeholder="0,00"
+                                                    value={budgeted || ''}
+                                                    onChange={(e) => handleGroupBudgetChange(group, parseFloat(e.target.value) || 0)}
+                                                />
+                                            </div>
+                                        </td>
+                                        {sortedMonths.map(month => {
+                                            const val = monthlyCategoryMatrix[month][group] || 0;
+                                            return (
+                                                <td key={`${month}-${group}`} className="p-4 text-right text-gray-500">
+                                                    {val > 0 ? val.toLocaleString('pt-BR', {minimumFractionDigits: 2}) : '-'}
+                                                </td>
+                                            );
+                                        })}
+                                        <td className="p-4 text-right border-l font-bold bg-gray-50 text-gray-900">
+                                            {avgReal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+                                        </td>
+                                        <td className={`p-4 text-right border-l font-black bg-gray-50 ${variance > 0 ? 'text-red-500' : variance < 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                            {budgeted > 0 ? (
+                                                <div className="flex flex-col items-end">
+                                                    <span>{variance > 0 ? '+' : ''}{variance.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                                                    <span className="text-[9px] opacity-70">({((variance / budgeted) * 100).toFixed(1)}%)</span>
+                                                </div>
+                                            ) : '-'}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                        <tfoot className="bg-gray-100 font-black">
+                            <tr>
+                                <td className="p-4 sticky left-0 bg-gray-100 border-r">TOTAL MENSAL</td>
+                                <td className="p-4 bg-indigo-100/50 text-indigo-800 text-right border-r">
+                                    {Object.values(groupBudgets).reduce((a, b) => a + b, 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+                                </td>
+                                {sortedMonths.map(month => {
+                                    const totalMonth = sortedCategoryGroups.reduce((acc, g) => acc + (monthlyCategoryMatrix[month][g] || 0), 0);
+                                    return (
+                                        <td key={`foot-${month}`} className="p-4 text-right text-red-600">
+                                            {totalMonth.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+                                        </td>
+                                    );
+                                })}
+                                <td className="p-4 text-right border-l text-red-700">
+                                    {(totalExpenses / (sortedMonths.length || 1)).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+                                </td>
+                                <td className="p-4 border-l bg-gray-200"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <div className="bg-gray-50 p-3 text-[10px] text-gray-400 italic flex justify-center border-t border-dashed gap-4">
+                    <span>* <strong>Orçado:</strong> Valor mensal planejado pelo consultor.</span>
+                    <span>* <strong>Desvio:</strong> Diferença entre a média real dos meses e o orçado.</span>
+                </div>
+            </div>
+        </div>
+    );
+  };
   
   const renderUpload = () => {
     const isApiConfigured = typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__ && __GEMINI_API_KEY__.length > 0;
@@ -1667,7 +2085,7 @@ export default function App() {
     { id: 0, title: '1. Resumo Pessoal', icon: Activity, render: renderSummary },
     { id: 1, title: '2. Orçamento', icon: Calculator, render: renderBudget },
     { id: 2, title: '3. Movimentações', icon: FileText, render: renderRealized },
-    { id: 3, title: '4. Balanço Patrimonial', icon: Layers, render: renderBalanceSheet }, // Nova função
+    { id: 3, title: '4. Balanço Patrimonial', icon: Layers, render: renderBalanceSheet },
     { id: 4, title: '5. Investimentos', icon: TrendingUp, render: renderInvestments },
     { id: 5, title: '6. Resumo Sim.', icon: BarChart3, render: renderSimulation },
     { id: 6, title: '7. Sim. Detalhada', icon: DollarSign, render: renderDetailedSimulation },
@@ -1676,6 +2094,7 @@ export default function App() {
     { id: 9, title: '10. Categorias', icon: Settings, render: renderCategories },
     { id: 10, title: '11. Upload / IA', icon: UploadCloud, render: renderUpload },
     { id: 11, title: '12. Clientes', icon: Users, render: renderClients },
+    { id: 12, title: '13. Fluxo Financeiro', icon: ArrowRightLeft, render: renderCashFlow },
   ];
 
   if (loadingSession) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-blue-600" /></div>;
