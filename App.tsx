@@ -210,8 +210,80 @@ export default function App() {
     return { categoryLabels, values, months };
   });
 
+  // --- Lógica de Sincronização Inteligente com a Aba 13 ---
+  useEffect(() => {
+    if (!data.transactions || data.transactions.length === 0) return;
+
+    setFlowData((prev: any) => {
+      const newValues = { ...prev.values };
+      const currentYear = new Date().getFullYear();
+
+      // Zera valores antes de repopular para evitar lixo de outros clientes
+      Object.keys(newValues).forEach(key => {
+        newValues[key] = new Array(12).fill(0);
+      });
+
+      data.transactions.forEach(t => {
+        const isoDate = normalizeToISO(t.date);
+        if (!isoDate) return;
+        
+        const date = new Date(isoDate);
+        const month = date.getMonth() + 1; // 1-12
+        
+        // Encontra o índice na nossa lista de meses customizada [9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8]
+        const monthIdx = prev.months.indexOf(month);
+        if (monthIdx === -1) return;
+
+        const amount = Math.abs(t.amount);
+        const group = t.type;
+        const category = t.category;
+
+        // Mapeamento de Renda
+        if (group === 'Receitas') {
+          newValues['renda'][monthIdx] += amount;
+        } 
+        
+        // Mapeamento de Despesas por Agrupamento Visual da Aba 13
+        if (group === 'Saúde') {
+          newValues['saude'][monthIdx] += amount;
+        } else if (group === 'Social') {
+          newValues['lazer'][monthIdx] += amount;
+        } else if (group === 'Transporte') {
+          newValues['carro'][monthIdx] += amount;
+        } else if (group === 'Financeiro') {
+          newValues['financeiro'][monthIdx] += amount;
+        } else if (category === 'Cartão de Crédito') {
+          newValues['cartao'][monthIdx] += amount;
+        } else if (group === 'Essencial') {
+          // Categorias que compõem "Casa"
+          const casaCategories = ['Aluguel', 'Condomínio', 'IPTU', 'Casa - DDT/Manutenção', 'Supermercado', 'Feira', 'Combo NET/Internet'];
+          if (casaCategories.includes(category)) {
+            newValues['casa'][monthIdx] += amount;
+          } else {
+            // Se não cair em nada específico, vai para outros ou o grupo principal
+            newValues['outros'][monthIdx] += amount;
+          }
+        } else {
+            newValues['outros'][monthIdx] += amount;
+        }
+      });
+
+      // Cálculo do Saldo (Renda - Despesas)
+      for (let i = 0; i < 12; i++) {
+        let totalExpenses = 0;
+        prev.categoryLabels.forEach((cat: any) => {
+          if (!cat.type && cat.id !== 'saldo') {
+            totalExpenses += newValues[cat.id][i];
+          }
+        });
+        newValues['saldo'][i] = newValues['renda'][i] - totalExpenses;
+      }
+
+      return { ...prev, values: newValues };
+    });
+  }, [data.transactions, data.selectedClientId]);
+
   const handleFlowValueChange = (catId: string, monthIdx: number, val: string) => {
-    // Agora usando o parseBRFloat que lida com separadores de milhar e decimal brasileiros
     const num = parseBRFloat(val);
     setFlowData((prev: any) => {
       const newValues = { ...prev.values };
@@ -652,7 +724,7 @@ export default function App() {
     const monthlyTotals = flowData.months.map((_, mIdx) => {
       let total = 0;
       flowData.categoryLabels.forEach((cat: any) => {
-        if (!cat.type) { // É uma categoria de despesa
+        if (!cat.type && cat.id !== 'saldo') { // É uma categoria de despesa
           total += flowData.values[cat.id][mIdx];
         }
       });
@@ -660,12 +732,16 @@ export default function App() {
     });
 
     return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-x-auto min-h-[600px]">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-x-auto min-h-[600px] animate-fade-in">
+        <div className="p-4 bg-blue-50 border-b flex justify-between items-center">
+            <h4 className="text-blue-800 font-bold flex items-center gap-2"><Activity className="w-4 h-4"/> Dados Sincronizados com Movimentações</h4>
+            <span className="text-[10px] text-blue-500 italic">* Valores extraídos automaticamente dos extratos</span>
+        </div>
         <table className="w-full text-[11px] border-collapse">
           <thead>
             {/* Cabeçalho superior: Ano */}
             <tr className="bg-[#1a3a1a] text-white">
-              <th className="p-2 border border-white/20 text-left min-w-[200px]" colSpan={3}>Orçamento 2026</th>
+              <th className="p-2 border border-white/20 text-left min-w-[200px]" colSpan={3}>Orçamento {new Date().getFullYear()} / {new Date().getFullYear() + 1}</th>
               {flowData.months.map((m: number, idx: number) => (
                 <th key={idx} className="p-2 border border-white/20 text-center min-w-[80px]">{m}</th>
               ))}
@@ -674,17 +750,17 @@ export default function App() {
           <tbody>
             {/* Linhas de Renda/Investimentos */}
             {flowData.categoryLabels.slice(0, 4).map((row: any) => (
-              <tr key={row.id} className={row.id === 'saldo' ? 'font-bold bg-gray-50' : ''}>
+              <tr key={row.id} className={row.id === 'saldo' ? 'font-bold bg-green-50' : 'bg-gray-50/50'}>
                 <td className="p-2 border border-gray-100 font-bold" colSpan={row.group ? 1 : 2}>{row.group || row.label}</td>
                 {row.group && <td className="p-2 border border-gray-100">{row.label.split(':')[1]?.trim() || row.label}</td>}
                 <td className="p-2 border border-gray-100 text-right">
-                    {row.id === 'renda' ? '3.000,00' : ''}
+                    {/* Espaço para Orçado inicial se houver */}
                 </td>
                 {flowData.months.map((_: any, mIdx: number) => (
                   <td key={mIdx} className="p-0 border border-gray-100">
                     <input 
                       type="text" 
-                      className={`w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors ${row.id === 'resgate' ? 'text-red-500 font-bold' : ''}`}
+                      className={`w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors font-medium ${row.id === 'saldo' ? (flowData.values[row.id][mIdx] >= 0 ? 'text-green-700' : 'text-red-600') : ''}`}
                       value={formatBRNumber(flowData.values[row.id][mIdx])}
                       onChange={(e) => handleFlowValueChange(row.id, mIdx, e.target.value)}
                     />
@@ -706,16 +782,16 @@ export default function App() {
             {/* Categorias de Despesa */}
             {flowData.categoryLabels.slice(4).map((row: any) => (
               <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                <td className="p-2 border border-gray-100 font-bold">{row.group}</td>
-                <td className="p-2 border border-gray-100">{row.label}</td>
-                <td className="p-2 border border-gray-100 text-right text-gray-500">
+                <td className="p-2 border border-gray-100 font-bold text-gray-500 uppercase text-[9px]">{row.group}</td>
+                <td className="p-2 border border-gray-100 font-medium">{row.label}</td>
+                <td className="p-2 border border-gray-100 text-right text-gray-400">
                   {row.budget ? formatBRNumber(row.budget, false) : '0,00'}
                 </td>
                 {flowData.months.map((_: any, mIdx: number) => (
                   <td key={mIdx} className="p-0 border border-gray-100">
                     <input 
                       type="text" 
-                      className="w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors"
+                      className={`w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors ${flowData.values[row.id][mIdx] > 0 ? 'text-gray-900' : 'text-gray-300'}`}
                       value={formatBRNumber(flowData.values[row.id][mIdx], false)}
                       onChange={(e) => handleFlowValueChange(row.id, mIdx, e.target.value)}
                     />
@@ -724,10 +800,10 @@ export default function App() {
               </tr>
             ))}
 
-            {/* Linha de Total Final */}
+            {/* Linha de Total Final de Despesas */}
             <tr className="bg-[#1a3a1a] text-white font-bold text-sm">
-              <td className="p-3 border border-white/20" colSpan={2}>Total</td>
-              <td className="p-3 border border-white/20 text-right">R$ 50.501,00</td>
+              <td className="p-3 border border-white/20" colSpan={2}>Total Saídas</td>
+              <td className="p-3 border border-white/20 text-right"> - </td>
               {monthlyTotals.map((total, idx) => (
                 <td key={idx} className="p-3 border border-white/20 text-right">
                   {formatBRNumber(total, false)}
