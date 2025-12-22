@@ -65,6 +65,21 @@ const formatDisplayDate = (dateStr: string | null | undefined): string => {
     return `${d}/${m}/${y}`;
 };
 
+// Helper para converter string BR (999.999,99) para número JS
+const parseBRFloat = (val: string): number => {
+    if (!val || val === '-') return 0;
+    // Remove pontos de milhar e substitui vírgula decimal por ponto
+    const clean = val.replace(/\./g, '').replace(',', '.').trim();
+    const num = parseFloat(clean);
+    return isNaN(num) ? 0 : num;
+};
+
+// Helper para formatar número JS para string BR
+const formatBRNumber = (num: number, useDashForZero: boolean = true): string => {
+    if (num === 0 && useDashForZero) return '-';
+    return num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 const getCategoryGroup = (cat: string): CategoryGroup => {
   const lowerCat = cat.toLowerCase();
   if (lowerCat === 'cartão de crédito' || lowerCat.includes('pagamento fatura') || lowerCat.includes('liquidação cartão')) return 'Pagamentos' as any;
@@ -196,7 +211,8 @@ export default function App() {
   });
 
   const handleFlowValueChange = (catId: string, monthIdx: number, val: string) => {
-    const num = parseFloat(val.replace(',', '.')) || 0;
+    // Agora usando o parseBRFloat que lida com separadores de milhar e decimal brasileiros
+    const num = parseBRFloat(val);
     setFlowData((prev: any) => {
       const newValues = { ...prev.values };
       newValues[catId][monthIdx] = num;
@@ -668,8 +684,8 @@ export default function App() {
                   <td key={mIdx} className="p-0 border border-gray-100">
                     <input 
                       type="text" 
-                      className={`w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors ${row.id === 'resgate' ? 'text-red-500' : ''}`}
-                      value={flowData.values[row.id][mIdx] === 0 ? '-' : flowData.values[row.id][mIdx].toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      className={`w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors ${row.id === 'resgate' ? 'text-red-500 font-bold' : ''}`}
+                      value={formatBRNumber(flowData.values[row.id][mIdx])}
                       onChange={(e) => handleFlowValueChange(row.id, mIdx, e.target.value)}
                     />
                   </td>
@@ -693,14 +709,14 @@ export default function App() {
                 <td className="p-2 border border-gray-100 font-bold">{row.group}</td>
                 <td className="p-2 border border-gray-100">{row.label}</td>
                 <td className="p-2 border border-gray-100 text-right text-gray-500">
-                  {row.budget ? row.budget.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00'}
+                  {row.budget ? formatBRNumber(row.budget, false) : '0,00'}
                 </td>
                 {flowData.months.map((_: any, mIdx: number) => (
                   <td key={mIdx} className="p-0 border border-gray-100">
                     <input 
                       type="text" 
                       className="w-full h-full p-2 bg-transparent text-right outline-none focus:bg-blue-50 transition-colors"
-                      value={flowData.values[row.id][mIdx] === 0 ? '0,00' : flowData.values[row.id][mIdx].toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      value={formatBRNumber(flowData.values[row.id][mIdx], false)}
                       onChange={(e) => handleFlowValueChange(row.id, mIdx, e.target.value)}
                     />
                   </td>
@@ -714,7 +730,7 @@ export default function App() {
               <td className="p-3 border border-white/20 text-right">R$ 50.501,00</td>
               {monthlyTotals.map((total, idx) => (
                 <td key={idx} className="p-3 border border-white/20 text-right">
-                  {total === 0 ? '0,00' : total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  {formatBRNumber(total, false)}
                 </td>
               ))}
             </tr>
