@@ -13,7 +13,8 @@ export const extractFinancialData = async (
   if (!apiKey) throw new Error("Chave de API do Gemini não configurada (VITE_API_KEY). Verifique as variáveis de ambiente no Vercel.");
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = 'gemini-3-pro-preview';
+  // Usar gemini-1.5-flash pois é mais rápido e tem limites maiores no tier gratuito
+  const model = 'gemini-1.5-flash';
 
   let categoriesString = "";
   if (customCategories && customCategories.length > 0) {
@@ -59,69 +60,101 @@ export const extractFinancialData = async (
     ${fileContent}
   `;
 
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          detectedClientName: { type: Type.STRING },
-          personalData: {
+  // Função helper de delay
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    try {
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
             type: Type.OBJECT,
             properties: {
-              name: { type: Type.STRING },
-              cpf: { type: Type.STRING },
-              netIncomeAnnual: { type: Type.NUMBER }
-            }
-          },
-          transactions: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                date: { type: Type.STRING, description: "YYYY-MM-DD" },
-                description: { type: Type.STRING },
-                amount: { type: Type.NUMBER },
-                category: { type: Type.STRING },
-                institution: { type: Type.STRING }
+              detectedClientName: { type: Type.STRING },
+              personalData: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  cpf: { type: Type.STRING },
+                  netIncomeAnnual: { type: Type.NUMBER }
+                }
+              },
+              transactions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    date: { type: Type.STRING, description: "YYYY-MM-DD" },
+                    description: { type: Type.STRING },
+                    amount: { type: Type.NUMBER },
+                    category: { type: Type.STRING },
+                    institution: { type: Type.STRING }
+                  }
+                }
+              },
+              assets: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    ticker: { type: Type.STRING },
+                    type: { type: Type.STRING, enum: ['Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'Dívida'] },
+                    totalValue: { type: Type.NUMBER },
+                    institution: { type: Type.STRING }
+                  }
+                }
               }
-            }
-          },
-          assets: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                ticker: { type: Type.STRING },
-                type: { type: Type.STRING, enum: ['Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'Dívida'] },
-                totalValue: { type: Type.NUMBER },
-                institution: { type: Type.STRING }
-              }
-            }
+            },
+            required: ["transactions"]
           }
-        },
-        required: ["transactions"]
+        }
+      });
+
+      const text = response.text;
+      if (!text) throw new Error("A IA não retornou dados.");
+
+      const parsed = JSON.parse(text.trim());
+
+      // Log de auditoria interna para debug no console
+      console.log("Auditoria FinPlanner:", {
+        count: parsed.transactions?.length,
+        sum: parsed.transactions?.reduce((a: number, b: any) => a + (b.amount || 0), 0)
+      });
+
+      return parsed;
+
+    } catch (e: any) {
+      // Verifica se é erro de cota (429) ou Resource Exhausted
+      if (e.message?.includes("429") || e.status === 429 || e.message?.includes("Quota exceeded") || e.message?.includes("RESOURCE_EXHAUSTED")) {
+        console.warn(`Tentativa ${attempts + 1} falhou por limite de cota.`);
+
+        // Tenta extrair o tempo de espera da mensagem de erro
+        const waitTimeMatch = e.message.match(/retry in (\d+(\.\d+)?)s/);
+        let waitTime = 30000; // Tempo padrão: 30s
+
+        if (waitTimeMatch) {
+          // Adiciona 2s de margem de segurança
+          waitTime = Math.ceil(parseFloat(waitTimeMatch[1]) * 1000) + 2000;
+        }
+
+        if (attempts < maxAttempts - 1) {
+          console.log(`Aguardando ${waitTime / 1000}s para tentar novamente...`);
+          await sleep(waitTime);
+          attempts++;
+          continue; // Tenta novamente
+        }
       }
+
+      console.error("Erro no Gemini:", e);
+      throw new Error("Erro ao processar com IA: " + (e.message || e));
     }
-  });
-
-  const text = response.text;
-  if (!text) throw new Error("A IA não retornou dados.");
-
-  try {
-    const parsed = JSON.parse(text.trim());
-
-    // Log de auditoria interna para debug no console
-    console.log("Auditoria FinPlanner:", {
-      count: parsed.transactions?.length,
-      sum: parsed.transactions?.reduce((a: number, b: any) => a + (b.amount || 0), 0)
-    });
-
-    return parsed;
-  } catch (e) {
-    console.error("Erro no parse JSON:", text);
-    throw new Error("Erro na estrutura de dados da IA.");
   }
+
+  throw new Error("Falha após múltiplas tentativas. Verifique sua cota ou tente mais tarde.");
 };
