@@ -13,8 +13,8 @@ export const extractFinancialData = async (
   if (!apiKey) throw new Error("Chave de API do Gemini não configurada (VITE_API_KEY). Verifique as variáveis de ambiente no Vercel.");
 
   const ai = new GoogleGenAI({ apiKey });
-  // Usar gemini-1.5-flash pois é mais rápido e tem limites maiores no tier gratuito
-  const model = 'gemini-1.5-flash';
+  // Usando versão específica 001 do Flash para garantir compatibilidade
+  const model = 'gemini-1.5-flash-001';
 
   let categoriesString = "";
   if (customCategories && customCategories.length > 0) {
@@ -130,6 +130,19 @@ export const extractFinancialData = async (
       return parsed;
 
     } catch (e: any) {
+      console.error(`Erro na tentativa ${attempts + 1}:`, e);
+
+      // LISTAGEM DE MODELOS PARA DEBUG SE DER 404
+      if (e.message?.includes("404") || e.status === 404) {
+        try {
+          console.log("Tentando listar modelos disponíveis...");
+          const listResp = await ai.models.list();
+          console.log("Modelos Disponíveis:", listResp);
+        } catch (listErr) {
+          console.error("Não foi possível listar modelos:", listErr);
+        }
+      }
+
       // Verifica se é erro de cota (429) ou Resource Exhausted
       if (e.message?.includes("429") || e.status === 429 || e.message?.includes("Quota exceeded") || e.message?.includes("RESOURCE_EXHAUSTED")) {
         console.warn(`Tentativa ${attempts + 1} falhou por limite de cota.`);
@@ -151,10 +164,10 @@ export const extractFinancialData = async (
         }
       }
 
-      console.error("Erro no Gemini:", e);
       throw new Error("Erro ao processar com IA: " + (e.message || e));
     }
   }
 
   throw new Error("Falha após múltiplas tentativas. Verifique sua cota ou tente mais tarde.");
 };
+```
