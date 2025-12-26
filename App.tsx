@@ -26,7 +26,7 @@ import { Auth } from './components/Auth';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 // Declaração global para checagem de debug
-declare const __GEMINI_API_KEY__: string | undefined;
+
 
 // --- TYPES FOR MULTI-UPLOAD ---
 type FileStatus = 'queued' | 'uploading' | 'extracting' | 'processing_ai' | 'saving' | 'completed' | 'error';
@@ -3293,7 +3293,7 @@ export default function App() {
     };
 
     const renderUpload = () => {
-        const isApiConfigured = typeof __GEMINI_API_KEY__ !== 'undefined' && __GEMINI_API_KEY__ && __GEMINI_API_KEY__.length > 0;
+        const isApiConfigured = !!import.meta.env.VITE_API_KEY && import.meta.env.VITE_API_KEY.length > 0;
 
         return (
             <div className="max-w-4xl mx-auto space-y-6 pb-20">
