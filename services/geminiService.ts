@@ -13,8 +13,9 @@ export const extractFinancialData = async (
   if (!apiKey) throw new Error("Chave de API do Gemini não configurada (VITE_API_KEY). Verifique as variáveis de ambiente no Vercel.");
 
   const ai = new GoogleGenAI({ apiKey });
-  // Usando versão específica 001 do Flash para garantir compatibilidade
-  const model = 'gemini-1.5-flash-001';
+  // Trocando para o modelo PRO (mais robusto) conforme solicitação do usuário.
+  // Modelos disponíveis (Dez/2024): gemini-1.5-pro, gemini-1.5-flash
+  const model = 'gemini-1.5-pro';
 
   let categoriesString = "";
   if (customCategories && customCategories.length > 0) {
