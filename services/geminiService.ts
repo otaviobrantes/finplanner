@@ -15,7 +15,7 @@ export const extractFinancialData = async (
   const ai = new GoogleGenAI({ apiKey });
   // Trocando para o modelo PRO (mais robusto) conforme solicitação do usuário.
   // Modelos disponíveis (Dez/2024): gemini-1.5-pro, gemini-1.5-flash
-  const model = 'gemini-1.5-pro';
+  const model = 'gemini-3-pro-preview';
 
   let categoriesString = "";
   if (customCategories && customCategories.length > 0) {
