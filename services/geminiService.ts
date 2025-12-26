@@ -7,7 +7,10 @@ export const extractFinancialData = async (
   userContext?: string,
   customCategories?: CategoryItem[]
 ): Promise<Partial<AppState> & { detectedClientName?: string }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = import.meta.env.VITE_API_KEY || (window as any).__GEMINI_API_KEY__;
+  if (!apiKey) throw new Error("Chave de API do Gemini não configurada (VITE_API_KEY)");
+
+  const ai = new GoogleGenAI({ apiKey });
   const model = 'gemini-3-pro-preview';
 
   let categoriesString = "";
