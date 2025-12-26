@@ -92,7 +92,7 @@ const generateDefaultCategories = (): CategoryItem[] => {
 };
 
 // Componente Modal de Troca de Senha
-const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
+const ForcePasswordChangeModal = ({ onClose, isForced = true }: { onClose: () => void, isForced?: boolean }) => {
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -136,13 +136,25 @@ const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
     return (
         <div className="fixed inset-0 bg-slate-900/90 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
-                <div className="flex flex-col items-center mb-6">
-                    <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
+                <div className="flex flex-col items-center mb-6 relative">
+                    {!isForced && (
+                        <button
+                            onClick={onClose}
+                            className="absolute -top-4 -right-4 p-2 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    )}
+                    <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
                         <Key className="w-8 h-8" />
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-900">Troca de Senha Obrigatória</h2>
+                    <h2 className="text-2xl font-bold text-gray-900">
+                        {isForced ? 'Troca de Senha Obrigatória' : 'Alterar Senha'}
+                    </h2>
                     <p className="text-center text-gray-500 mt-2 text-sm">
-                        Por segurança, você precisa redefinir sua senha provisória antes de continuar.
+                        {isForced
+                            ? 'Por segurança, você precisa redefinir sua senha provisória antes de continuar.'
+                            : 'Digite sua nova senha abaixo para atualizar seu acesso.'}
                     </p>
                 </div>
 
@@ -181,7 +193,7 @@ const ForcePasswordChangeModal = ({ onClose }: { onClose: () => void }) => {
                         disabled={loading}
                         className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                     >
-                        {loading ? <Loader2 className="animate-spin" /> : 'Atualizar Senha e Entrar'}
+                        {loading ? <Loader2 className="animate-spin" /> : (isForced ? 'Atualizar Senha e Entrar' : 'Salvar Nova Senha')}
                     </button>
                 </form>
             </div>
@@ -237,6 +249,7 @@ export default function App() {
 
     // Force Password Change State
     const [mustChangePassword, setMustChangePassword] = useState(false);
+    const [showPasswordModal, setShowPasswordModal] = useState(false);
 
     // Estado para edição de categorias (Página 10)
     const [newCategoryName, setNewCategoryName] = useState("");
@@ -868,6 +881,10 @@ export default function App() {
 
     const handleLogout = async () => {
         await supabase.auth.signOut();
+    };
+
+    const handleTogglePasswordModal = () => {
+        setShowPasswordModal(!showPasswordModal);
     };
 
     const addLog = (msg: string) => setProcessingLog(prev => [`${new Date().toLocaleTimeString()} - ${msg}`, ...prev]);
@@ -3441,8 +3458,16 @@ export default function App() {
 
     return (
         <div className="flex min-h-screen bg-gray-50 text-gray-900 relative">
-            {/* FORCE PASSWORD CHANGE MODAL */}
-            {mustChangePassword && <ForcePasswordChangeModal onClose={() => window.location.reload()} />}
+            {/* PASSWORD CHANGE MODAL (FORCE OR VOLUNTARY) */}
+            {(mustChangePassword || showPasswordModal) && (
+                <ForcePasswordChangeModal
+                    isForced={mustChangePassword}
+                    onClose={() => {
+                        setMustChangePassword(false);
+                        setShowPasswordModal(false);
+                    }}
+                />
+            )}
 
             <aside className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-blue-900 text-white flex flex-col fixed h-full z-10 transition-all duration-300 overflow-y-auto custom-scrollbar`}>
                 <div className={`p-6 border-b border-blue-800 flex items-center ${isSidebarExpanded ? 'justify-start gap-3' : 'justify-center'}`}>
@@ -3483,7 +3508,10 @@ export default function App() {
                         )
                     })}
                 </nav>
-                <div className="p-4 border-t border-blue-800">
+                <div className="p-4 border-t border-blue-800 space-y-2">
+                    <button onClick={handleTogglePasswordModal} className={`flex items-center ${isSidebarExpanded ? 'justify-start px-0' : 'justify-center'} gap-2 text-blue-200 hover:text-white transition-colors text-sm w-full`}>
+                        <Key className="w-4 h-4 flex-shrink-0" /> {isSidebarExpanded && 'Trocar Senha'}
+                    </button>
                     <button onClick={handleLogout} className={`flex items-center ${isSidebarExpanded ? 'justify-start px-0' : 'justify-center'} gap-2 text-blue-200 hover:text-white transition-colors text-sm w-full`}>
                         <LogOut className="w-4 h-4 flex-shrink-0" /> {isSidebarExpanded && 'Sair'}
                     </button>
