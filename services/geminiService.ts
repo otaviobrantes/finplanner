@@ -170,4 +170,3 @@ export const extractFinancialData = async (
 
   throw new Error("Falha após múltiplas tentativas. Verifique sua cota ou tente mais tarde.");
 };
-```
