@@ -12,21 +12,34 @@ export const extractFinancialData = async (
 
   let categoriesString = "";
   if (customCategories && customCategories.length > 0) {
-      categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
+    categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
   } else {
-      categoriesString = Object.values(TransactionCategory).join(', ');
+    categoriesString = Object.values(TransactionCategory).join(', ');
   }
 
   const prompt = `
     You are a Senior Financial Auditor AI. Your task is to extract EVERY SINGLE transaction from a Brazilian bank statement or credit card bill with 100% precision.
 
     *** AUDIT PROTOCOL - FOLLOW STRICTLY ***
-    1. TARGET VALUE: Find the "Total de Lançamentos Atuais" (in this bill it is R$ 3.217,45). This is your checksum.
+    1. TARGET VALUE: Identify the "Total Amount" or "Total de Lançamentos" in the document header/footer. This is your checksum target.
     2. ROW SCANNING: Look for lines following the pattern: [DATE] [DESCRIPTION] [VALUE].
     3. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 34,90) or have complex names (e.g., DM*MUBI, PRODUTOS GLOBO 06/12). 
     4. INSTALLMENTS: "06/12" means a monthly installment. Extract the current value for the transactions list.
-    5. CHECKSUM VALIDATION: Sum all extracted transaction amounts. If your sum does not match the "Total de Lançamentos Atuais" from the bill, RE-SCAN the text to find what you missed (look for international items, fees, and small purchases).
+    5. CHECKSUM VALIDATION: Sum the ABSOLUTE VALUES of extracted transactions. Compare with the Target Value found in step 1. If they diverge significantly, RE-SCAN.
     
+    *** CRITICAL: DOCUMENT TYPE & SIGN LOGIC ***
+    1. DETECT TYPE:
+       - "CREDIT CARD BILL" (Fatura): Look for keywords "Vencimento", "Pagamento Mínimo", "Limite", "Fatura".
+       - "BANK STATEMENT" (Extrato): Look for keywords "Saldo", "Extrato", "Conta Corrente", "Pix".
+
+    2. APPLY SIGNS BASED ON TYPE:
+       - IF CREDIT CARD BILL: 
+         * Positive values in the PDF are usually PURCHASES/DEBITS -> You MUST convert them to NEGATIVE numbers (e.g., 100.00 becomes -100.00).
+         * Negative values (often marked with "-" or "CR") are PAYMENTS/CREDITS -> Convert to POSITIVE numbers.
+       - IF BANK STATEMENT:
+         * Positive values are INCOME/DEPOSITS -> Keep POSITIVE.
+         * Negative values are EXPENSES/WITHDRAWALS -> Keep NEGATIVE.
+
     *** DATA MAPPING ***
     - HOLDER: Found near "Titular" or "Nome do Pagador".
     - CATEGORIZATION: Map each item to the most specific category provided below.
@@ -94,11 +107,11 @@ export const extractFinancialData = async (
 
   try {
     const parsed = JSON.parse(text.trim());
-    
+
     // Log de auditoria interna para debug no console
     console.log("Auditoria FinPlanner:", {
-        count: parsed.transactions?.length,
-        sum: parsed.transactions?.reduce((a: number, b: any) => a + (b.amount || 0), 0)
+      count: parsed.transactions?.length,
+      sum: parsed.transactions?.reduce((a: number, b: any) => a + (b.amount || 0), 0)
     });
 
     return parsed;

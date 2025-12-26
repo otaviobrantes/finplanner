@@ -2,7 +2,7 @@
 
 export enum TransactionCategory {
   // 2.2 SAÍDAS - POR CATEGORIA
-  
+
   // Cartão Crédito
   CREDIT_CARD_PAYMENT = 'Cartão de Crédito',
 
@@ -151,6 +151,8 @@ export interface IncomeDetails {
   thirteenthIrrf: number;
   rentIncome: number;
   carneLeao: number;
+  medicalExpenses?: number; // Adicionado para PGBL
+  educationExpenses?: number; // Adicionado para PGBL
 }
 
 export interface Address {
@@ -184,6 +186,7 @@ export interface DetailedPersonalData {
 
   // 1.5 Dependentes
   dependents: Dependent[];
+  budgetTargets?: Record<string, number>; // Grupo -> Valor Mensal Meta
 }
 
 export interface Transaction {
@@ -198,7 +201,7 @@ export interface Transaction {
 
 export interface Asset {
   ticker: string;
-  type: 'Ação' | 'FII' | 'Renda Fixa' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida';
+  type: 'Ação' | 'FII' | 'Renda Fixa' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
   quantity: number;
   currentPrice: number;
   totalValue: number;
@@ -262,7 +265,8 @@ export const INITIAL_STATE: AppState = {
     },
     netIncomeAnnual: 0,
     insuranceTotal: 0,
-    dependents: []
+    dependents: [],
+    budgetTargets: {}
   },
   transactions: [],
   assets: [],
