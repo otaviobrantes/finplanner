@@ -2,27 +2,27 @@
 import { AppState, TransactionCategory, CategoryItem } from "../types";
 
 export const extractFinancialDataWithClaude = async (
-    fileContent: string,
-    userContext?: string,
-    customCategories?: CategoryItem[]
+  fileContent: string,
+  userContext?: string,
+  customCategories?: CategoryItem[]
 ): Promise<Partial<AppState> & { detectedClientName?: string }> => {
-    const apiKey = import.meta.env.VITE_CLAUDE_API_KEY;
+  const apiKey = import.meta.env.VITE_CLAUDE_API_KEY ? import.meta.env.VITE_CLAUDE_API_KEY.trim() : "";
 
-    if (!apiKey) throw new Error("Chave de API do Claude não configurada (VITE_CLAUDE_API_KEY).");
+  if (!apiKey) throw new Error("Chave de API do Claude não configurada (VITE_CLAUDE_API_KEY).");
 
-    let categoriesString = "";
-    if (customCategories && customCategories.length > 0) {
-        categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
-    } else {
-        categoriesString = Object.values(TransactionCategory).join(', ');
-    }
+  let categoriesString = "";
+  if (customCategories && customCategories.length > 0) {
+    categoriesString = customCategories.map(c => `- ${c.name} (Grupo: ${c.group})`).join('\n');
+  } else {
+    categoriesString = Object.values(TransactionCategory).join(', ');
+  }
 
-    const systemPrompt = `
+  const systemPrompt = `
     You are a Senior Financial Auditor AI. Your task is to extract EVERY SINGLE transaction from a Brazilian bank statement or credit card bill with 100% precision.
     Return ONLY a valid JSON object matching the requested schema.
   `;
 
-    const userPrompt = `
+  const userPrompt = `
     *** AUDIT PROTOCOL - FOLLOW STRICTLY ***
     1. TARGET VALUE: Identify the "Total Amount" or "Total de Lançamentos" in the document header/footer. This is your checksum target.
     2. ROW SCANNING: Look for lines following the pattern: [DATE] [DESCRIPTION] [VALUE].
@@ -84,42 +84,42 @@ export const extractFinancialDataWithClaude = async (
     }
   `;
 
-    try {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "x-api-key": apiKey,
-                "anthropic-version": "2023-06-01",
-                "dangerously-allow-browser": "true" // Note: In a real production app, this should be handled by a backend
-            },
-            body: JSON.stringify({
-                model: "claude-3-5-sonnet-20240620",
-                max_tokens: 4096,
-                system: systemPrompt,
-                messages: [
-                    { role: "user", content: userPrompt }
-                ]
-            })
-        });
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "dangerously-allow-browser": "true" // Note: In a real production app, this should be handled by a backend
+      },
+      body: JSON.stringify({
+        model: "claude-3-5-sonnet-20240620",
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Claude API Error: ${errorData.error?.message || response.statusText}`);
-        }
-
-        const data = await response.json();
-        const text = data.content[0].text;
-
-        // Attempt to parse JSON from the response
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error("A IA não retornou um JSON válido.");
-
-        const parsed = JSON.parse(jsonMatch[0]);
-        return parsed;
-
-    } catch (error: any) {
-        console.error("Error in Claude extraction:", error);
-        throw new Error("Erro ao processar com Claude: " + error.message);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Claude API Error: ${errorData.error?.message || response.statusText}`);
     }
+
+    const data = await response.json();
+    const text = data.content[0].text;
+
+    // Attempt to parse JSON from the response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("A IA não retornou um JSON válido.");
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return parsed;
+
+  } catch (error: any) {
+    console.error("Error in Claude extraction:", error);
+    throw new Error("Erro ao processar com Claude: " + (error.message || "Erro desconhecido"));
+  }
 };
