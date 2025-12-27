@@ -16,6 +16,7 @@ import {
     ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, Landmark, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check
 } from 'lucide-react';
 import { extractFinancialData } from './services/geminiService';
+import { extractFinancialDataWithClaude } from './services/claudeService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
@@ -240,6 +241,9 @@ export default function App() {
     const [showSuccessAlert, setShowSuccessAlert] = useState(false);
     const [successMessage, setSuccessMessage] = useState("");
     const [alertType, setAlertType] = useState<'success' | 'error'>('success');
+
+    // AI Provider State
+    const [aiProvider, setAiProvider] = useState<'gemini' | 'claude'>('gemini');
 
     // New Client Creation State
     const [newClientName, setNewClientName] = useState("");
@@ -962,10 +966,12 @@ export default function App() {
                 }
 
                 updateQueueItem(item.id, { status: 'processing_ai' });
-                addLog(`[${item.file.name}] Enviando para Inteligência Artificial...`);
+                addLog(`[${item.file.name}] Enviando para Inteligência Artificial (${aiProvider === 'gemini' ? 'Gemini' : 'Claude'})...`);
 
                 // PASSANDO AS CATEGORIAS ATUAIS PARA O SERVIÇO
-                const extractedData = await extractFinancialData(extractedText, customContext, data.categories);
+                const extractedData = aiProvider === 'gemini'
+                    ? await extractFinancialData(extractedText, customContext, data.categories)
+                    : await extractFinancialDataWithClaude(extractedText, customContext, data.categories);
 
                 let targetClientId = data.selectedClientId;
                 let targetClientName = extractedData.detectedClientName;
@@ -3327,6 +3333,26 @@ export default function App() {
 
                         <div className={`text-xs px-3 py-1 rounded-full border ${isApiConfigured ? 'text-green-600 bg-green-50 border-green-200' : 'text-red-600 bg-red-50 border-red-200'}`}>
                             {isApiConfigured ? 'API Key: Configurada ✅' : 'API Key: Ausente ❌ (Verifique Vercel)'}
+                        </div>
+                    </div>
+
+                    {/* AI PROVIDER SELECTOR */}
+                    <div className="mt-6 flex justify-center">
+                        <div className="bg-white p-1 rounded-xl border shadow-sm flex gap-1">
+                            <button
+                                onClick={() => setAiProvider('gemini')}
+                                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${aiProvider === 'gemini' ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'text-gray-500 hover:bg-gray-50'}`}
+                            >
+                                <BrainCircuit className={`w-4 h-4 ${aiProvider === 'gemini' ? 'text-white' : 'text-blue-500'}`} />
+                                Google Gemini
+                            </button>
+                            <button
+                                onClick={() => setAiProvider('claude')}
+                                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${aiProvider === 'claude' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-gray-500 hover:bg-gray-50'}`}
+                            >
+                                <Activity className={`w-4 h-4 ${aiProvider === 'claude' ? 'text-white' : 'text-indigo-500'}`} />
+                                Anthropic Claude
+                            </button>
                         </div>
                     </div>
                 </div>
