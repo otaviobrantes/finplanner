@@ -242,7 +242,7 @@ export default function App() {
     const [alertType, setAlertType] = useState<'success' | 'error'>('success');
 
     // AI Provider State - Agora armazena o ID do modelo OpenRouter selecionado
-    const [selectedModel, setSelectedModel] = useState<string>('google/gemma-3-27b-it:free');
+    const [selectedModel, setSelectedModel] = useState<string>('google/gemini-2.0-flash-exp:free');
 
     // New Client Creation State
     const [newClientName, setNewClientName] = useState("");
@@ -2411,20 +2411,20 @@ export default function App() {
                                 </div>
                                 <div className="p-4 flex flex-wrap gap-2">
                                     {cats.map(cat => (
-                                        <div key={cat.id} className={`group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 ${cat.isCustom ? 'border-blue-200 bg-blue-50' : ''} hover:border-blue-300 transition-colors`}>
+                                        <div key={cat.id} className={`group flex items-center gap-1 bg-white border border-gray-200 rounded px-2 h-7 text-xs text-gray-700 ${cat.isCustom ? 'border-blue-200 bg-blue-50' : ''} hover:border-blue-300 transition-colors`}>
                                             <span>{cat.name}</span>
                                             {cat.isCustom && (
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.preventDefault();
-                                                        e.stopPropagation(); // Importante para não fechar acordeons ou disparar pais
+                                                        e.stopPropagation();
                                                         handleDeleteCategory(cat.id);
                                                     }}
-                                                    className="ml-1 z-10 relative cursor-pointer text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors p-2 flex items-center justify-center"
+                                                    className="ml-0.5 z-10 relative cursor-pointer text-gray-400 hover:text-red-500 transition-colors flex items-center justify-center"
                                                     title="Remover (Global)"
                                                 >
-                                                    <X className="w-4 h-4 pointer-events-none" />
+                                                    <X className="w-3 h-3 pointer-events-none" />
                                                 </button>
                                             )}
                                         </div>
