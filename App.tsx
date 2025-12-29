@@ -15,8 +15,7 @@ import {
     UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
     ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, Landmark, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check
 } from 'lucide-react';
-import { extractFinancialData } from './services/geminiService';
-import { extractFinancialDataWithClaude } from './services/claudeService';
+import { extractFinancialDataWithOpenRouter, OPENROUTER_MODELS } from './services/openRouterService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
@@ -242,8 +241,8 @@ export default function App() {
     const [successMessage, setSuccessMessage] = useState("");
     const [alertType, setAlertType] = useState<'success' | 'error'>('success');
 
-    // AI Provider State
-    const [aiProvider, setAiProvider] = useState<'gemini' | 'claude'>('gemini');
+    // AI Provider State - Agora armazena o ID do modelo OpenRouter selecionado
+    const [selectedModel, setSelectedModel] = useState<string>('google/gemma-3-27b-it:free');
 
     // New Client Creation State
     const [newClientName, setNewClientName] = useState("");
@@ -966,12 +965,11 @@ export default function App() {
                 }
 
                 updateQueueItem(item.id, { status: 'processing_ai' });
-                addLog(`[${item.file.name}] Enviando para Inteligência Artificial (${aiProvider === 'gemini' ? 'Gemini' : 'Claude'})...`);
+                const modelName = OPENROUTER_MODELS.find(m => m.id === selectedModel)?.name || selectedModel;
+                addLog(`[${item.file.name}] Enviando para Inteligência Artificial (${modelName})...`);
 
-                // PASSANDO AS CATEGORIAS ATUAIS PARA O SERVIÇO
-                const extractedData = aiProvider === 'gemini'
-                    ? await extractFinancialData(extractedText, customContext, data.categories)
-                    : await extractFinancialDataWithClaude(extractedText, customContext, data.categories);
+                // PASSANDO AS CATEGORIAS ATUAIS PARA O SERVIÇO OPENROUTER
+                const extractedData = await extractFinancialDataWithOpenRouter(extractedText, selectedModel, customContext, data.categories);
 
                 let targetClientId = data.selectedClientId;
                 let targetClientName = extractedData.detectedClientName;
@@ -3316,7 +3314,14 @@ export default function App() {
     };
 
     const renderUpload = () => {
-        const isApiConfigured = !!import.meta.env.VITE_API_KEY && import.meta.env.VITE_API_KEY.length > 0;
+        const isApiConfigured = !!import.meta.env.VITE_OPENROUTER_API_KEY && import.meta.env.VITE_OPENROUTER_API_KEY.length > 0;
+
+        // Agrupa modelos por provider para o select
+        const groupedModels = OPENROUTER_MODELS.reduce((acc, model) => {
+            if (!acc[model.provider]) acc[model.provider] = [];
+            acc[model.provider].push(model);
+            return acc;
+        }, {} as Record<string, typeof OPENROUTER_MODELS>);
 
         return (
             <div className="max-w-4xl mx-auto space-y-6 pb-20">
@@ -3332,27 +3337,35 @@ export default function App() {
                         )}
 
                         <div className={`text-xs px-3 py-1 rounded-full border ${isApiConfigured ? 'text-green-600 bg-green-50 border-green-200' : 'text-red-600 bg-red-50 border-red-200'}`}>
-                            {isApiConfigured ? 'API Key: Configurada ✅' : 'API Key: Ausente ❌ (Verifique Vercel)'}
+                            {isApiConfigured ? 'OpenRouter API: Configurada ✅' : 'OpenRouter API: Ausente ❌ (Configure VITE_OPENROUTER_API_KEY)'}
                         </div>
                     </div>
 
-                    {/* AI PROVIDER SELECTOR */}
+                    {/* AI MODEL SELECTOR */}
                     <div className="mt-6 flex justify-center">
-                        <div className="bg-white p-1 rounded-xl border shadow-sm flex gap-1">
-                            <button
-                                onClick={() => setAiProvider('gemini')}
-                                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${aiProvider === 'gemini' ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'text-gray-500 hover:bg-gray-50'}`}
+                        <div className="bg-white p-4 rounded-xl border shadow-sm w-full max-w-md">
+                            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                                <BrainCircuit className="w-4 h-4 text-blue-500" />
+                                Modelo de IA
+                            </label>
+                            <select
+                                value={selectedModel}
+                                onChange={(e) => setSelectedModel(e.target.value)}
+                                className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm font-medium text-gray-700 bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all cursor-pointer hover:bg-white"
                             >
-                                <BrainCircuit className={`w-4 h-4 ${aiProvider === 'gemini' ? 'text-white' : 'text-blue-500'}`} />
-                                Google Gemini
-                            </button>
-                            <button
-                                onClick={() => setAiProvider('claude')}
-                                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all ${aiProvider === 'claude' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-gray-500 hover:bg-gray-50'}`}
-                            >
-                                <Activity className={`w-4 h-4 ${aiProvider === 'claude' ? 'text-white' : 'text-indigo-500'}`} />
-                                Anthropic Claude
-                            </button>
+                                {Object.entries(groupedModels).map(([provider, models]) => (
+                                    <optgroup key={provider} label={provider}>
+                                        {models.map((model) => (
+                                            <option key={model.id} value={model.id}>
+                                                {model.name}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                            <p className="text-xs text-gray-400 mt-2 text-center">
+                                Powered by <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">OpenRouter</a> - Acesso a dezenas de LLMs com uma única API
+                            </p>
                         </div>
                     </div>
                 </div>
