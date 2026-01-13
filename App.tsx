@@ -13,7 +13,7 @@ import {
     BarChart3, TrendingUp, DollarSign,
     FileText, Briefcase, Calculator, LineChart, Layers,
     UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
-    ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, Landmark, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check
+    ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, Landmark, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check, CreditCard
 } from 'lucide-react';
 import { extractFinancialDataWithOpenRouter, OPENROUTER_MODELS } from './services/openRouterService';
 import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
@@ -242,7 +242,7 @@ export default function App() {
     const [alertType, setAlertType] = useState<'success' | 'error'>('success');
 
     // AI Provider State - Agora armazena o ID do modelo OpenRouter selecionado
-    const [selectedModel, setSelectedModel] = useState<string>('google/gemini-2.0-flash-exp:free');
+    const [selectedModel, setSelectedModel] = useState<string>('openai/gpt-4o-mini');
 
     // New Client Creation State
     const [newClientName, setNewClientName] = useState("");
@@ -296,9 +296,26 @@ export default function App() {
     const [isEditingProfessional, setIsEditingProfessional] = useState(false);
     const [professionalForm, setProfessionalForm] = useState<any>(null);
 
-    // --- ESTADO PARA EDIÇÃO DE ATIVOS (BALANÇO PATRIMONIAL) ---
     const [showAssetModal, setShowAssetModal] = useState(false);
     const [editingAssetIndex, setEditingAssetIndex] = useState<number | null>(null);
+
+    // --- ESTADO PARA FILTRO DE INVESTIMENTOS (PÁGINA 5) ---
+    const [investmentFilters, setInvestmentFilters] = useState({
+        type: 'Todos',
+        institution: 'Todas'
+    });
+
+    // --- ESTADO PARA LANÇAMENTO MANUAL (PÁGINA 11/3) ---
+    const [showAddTransaction, setShowAddTransaction] = useState(false);
+    const [newTransaction, setNewTransaction] = useState<Partial<Transaction> & { transactionType: 'credit' | 'debit' }>({
+        date: new Date().toISOString().split('T')[0],
+        description: "",
+        amount: 0,
+        category: "",
+        type: "Essencial",
+        institution: "Manual",
+        transactionType: 'debit'
+    });
     const [assetFormData, setAssetFormData] = useState<{
         ticker: string;
         type: 'Ação' | 'FII' | 'Renda Fixa' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
@@ -314,6 +331,27 @@ export default function App() {
         totalValue: 0,
         institution: ''
     });
+
+    // --- ESTADO PARA IMPRESSÃO PERSONALIZADA ---
+    const [showPrintModal, setShowPrintModal] = useState(false);
+    const [printConfig, setPrintConfig] = useState({
+        cover: true,
+        personalData: true,
+        budget: true,
+        cashFlow: true,
+        realized: true,
+        assets: true,
+        investments: true,
+        insurance: true,
+        simulation: true,
+        pgbl: true,
+        calculator: true
+    });
+
+    // --- ESTADO PARA LÓGICA DE FATURA DE CARTÃO ---
+    const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+    const [selectedTransactionForInvoice, setSelectedTransactionForInvoice] = useState<Transaction | null>(null);
+    const [invoiceTotalValue, setInvoiceTotalValue] = useState(0);
 
     // Sync capital de decumulação com o patrimônio do cliente carregado
     useEffect(() => {
@@ -882,6 +920,53 @@ export default function App() {
         }
     };
 
+    // --- HANDLERS PARA LÓGICA DE FATURA DE CARTÃO ---
+    const handleIdentifyInvoice = (transaction: Transaction) => {
+        setSelectedTransactionForInvoice(transaction);
+        setInvoiceTotalValue(Math.abs(transaction.amount)); // Default is the paid amount
+        setShowInvoiceModal(true);
+    };
+
+    const handleSaveInvoiceDebt = async () => {
+        if (!selectedTransactionForInvoice || !data.selectedClientId || !session?.user) return;
+
+        const paidAmount = Math.abs(selectedTransactionForInvoice.amount);
+        const remainder = invoiceTotalValue - paidAmount;
+
+        if (remainder > 0.01) {
+            // Cria automaticamente um passivo (dívida)
+            const newDebt: any = {
+                ticker: `Resíduo Fatura - ${selectedTransactionForInvoice.institution || 'Cartão'}`,
+                type: 'Dívida',
+                quantity: 1,
+                currentPrice: remainder,
+                totalValue: remainder,
+                institution: selectedTransactionForInvoice.institution || 'Cartão',
+                classification: 'Cartão de Crédito'
+            };
+
+            const updatedAssets = [...data.assets, newDebt];
+
+            setData(prev => ({
+                ...prev,
+                assets: updatedAssets
+            }));
+
+            await saveFinancialData(session.user.id, data.selectedClientId, { assets: updatedAssets });
+
+            setSuccessMessage(`Dívida de ${remainder.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} criada automaticamente.`);
+            setAlertType('success');
+            setShowSuccessAlert(true);
+        } else {
+            setSuccessMessage("Fatura paga integralmente. Nenhuma dívida criada.");
+            setAlertType('success');
+            setShowSuccessAlert(true);
+        }
+
+        setShowInvoiceModal(false);
+        setSelectedTransactionForInvoice(null);
+    };
+
     const handleLogout = async () => {
         await supabase.auth.signOut();
     };
@@ -1031,6 +1116,44 @@ export default function App() {
 
     const handleManualIncomeChange = (monthKey: string, newValue: number) => {
         setManualIncomes(prev => ({ ...prev, [monthKey]: newValue }));
+    };
+
+    // --- HANDLERS PARA LANÇAMENTO MANUAL (PÁGINA 3) ---
+    const handleSaveManualTransaction = () => {
+        if (!newTransaction.description || !newTransaction.amount || !newTransaction.category) {
+            alert("Preencha descrição, valor e categoria.");
+            return;
+        }
+
+        const trans: Transaction = {
+            id: `manual-${Date.now()}`,
+            date: newTransaction.date || new Date().toISOString().split('T')[0],
+            description: newTransaction.description,
+            amount: newTransaction.transactionType === 'debit' ? -Math.abs(newTransaction.amount) : Math.abs(newTransaction.amount),
+            category: newTransaction.category,
+            type: newTransaction.type || "Essencial",
+            institution: newTransaction.institution || "Manual"
+        };
+
+        setData(prev => ({
+            ...prev,
+            transactions: [trans, ...prev.transactions]
+        }));
+
+        setShowAddTransaction(false);
+        setNewTransaction({
+            date: new Date().toISOString().split('T')[0],
+            description: "",
+            amount: 0,
+            category: "",
+            type: "Essencial",
+            institution: "Manual",
+            transactionType: 'debit'
+        });
+
+        setSuccessMessage("Lançamento adicionado com sucesso!");
+        setShowSuccessAlert(true);
+        setTimeout(() => setShowSuccessAlert(false), 3000);
     };
 
     const handleGroupBudgetChange = (group: string, value: number) => {
@@ -1883,6 +2006,13 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setShowAddTransaction(true)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-colors mr-2"
+                        >
+                            <Plus className="w-4 h-4" /> Novo Lançamento
+                        </button>
+
                         <div className="flex items-center gap-2 bg-gray-50 border rounded-lg px-2 py-1">
                             <Calendar className="w-4 h-4 text-gray-400" />
                             <input
@@ -1942,8 +2072,17 @@ export default function App() {
                                     ))}
                                 </select>
                             </div>
-                            <div className={`col-span-2 text-right font-bold ${t.amount > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            <div className={`col-span-2 text-right font-bold ${t.amount > 0 ? 'text-green-600' : 'text-red-500'} flex items-center justify-end gap-2`}>
                                 {t.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                {t.category === TransactionCategory.CREDIT_CARD_PAYMENT && (
+                                    <button
+                                        onClick={() => handleIdentifyInvoice(t)}
+                                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-100 shadow-sm"
+                                        title="Detalhes da Fatura"
+                                    >
+                                        <CreditCard className="w-4 h-4" />
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ))}
@@ -2273,8 +2412,16 @@ export default function App() {
 
     // PAGINA 5: INVESTIMENTOS
     const renderInvestments = () => {
-        // Filtra Dívidas e Veículos (uso pessoal, não investimento)
-        const investmentAssets = data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo');
+        const types = ['Todos', ...Array.from(new Set(data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo').map(a => a.type)))];
+        const institutions = ['Todas', ...Array.from(new Set(data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo').map(a => a.institution)))];
+
+        // Filtra Dívidas e Veículos (uso pessoal, não investimento) E aplica filtros finos
+        const investmentAssets = data.assets.filter(a => {
+            const isInvest = a.type !== 'Dívida' && a.type !== 'Veículo';
+            const matchesType = investmentFilters.type === 'Todos' || a.type === investmentFilters.type;
+            const matchesInst = investmentFilters.institution === 'Todas' || a.institution === investmentFilters.institution;
+            return isInvest && matchesType && matchesInst;
+        });
 
         if (investmentAssets.length === 0) {
             return (
@@ -2288,8 +2435,37 @@ export default function App() {
 
         return (
             <div className="space-y-6">
+                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4 items-end">
+                    <div className="flex-1 w-full">
+                        <h3 className="text-lg font-bold text-gray-800 mb-2">Alocação de Ativos</h3>
+                        <p className="text-xs text-gray-400">Dados baseados no último upload ou cadastro manual.</p>
+                    </div>
+                    <div className="flex gap-2 w-full md:w-auto">
+                        <div className="flex-1 md:w-40">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Tipo</label>
+                            <select
+                                className="w-full border rounded-lg p-2 text-xs bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
+                                value={investmentFilters.type}
+                                onChange={e => setInvestmentFilters(prev => ({ ...prev, type: e.target.value }))}
+                            >
+                                {types.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex-1 md:w-40">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Instituição</label>
+                            <select
+                                className="w-full border rounded-lg p-2 text-xs bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500"
+                                value={investmentFilters.institution}
+                                onChange={e => setInvestmentFilters(prev => ({ ...prev, institution: e.target.value }))}
+                            >
+                                {institutions.map(i => <option key={i} value={i}>{i}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                    <h3 className="text-lg font-bold text-gray-800 mb-4">Alocação de Ativos</h3>
+                    <h3 className="text-lg font-bold text-gray-800 mb-4">Grafico de Alocação</h3>
                     <div className="h-64">
                         <AllocationChart assets={investmentAssets} />
                     </div>
@@ -2725,9 +2901,9 @@ export default function App() {
         for (let y = 0; y <= years; y++) {
             dataPoints.push({
                 year: new Date().getFullYear() + y,
-                pessimista: Math.round(p),
-                realista: Math.round(r),
-                otimista: Math.round(o)
+                pessimistic: Math.round(p),
+                realistic: Math.round(r),
+                optimistic: Math.round(o)
             });
             p = (p + contrib) * 1.04;
             r = (r + contrib) * 1.06;
@@ -2746,15 +2922,15 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center mt-6">
                     <div className="p-4 border-t-4 border-orange-400 bg-orange-50">
                         <p className="font-bold text-orange-900">Pessimista (4% a.a.)</p>
-                        <p className="text-lg">{finalData.pessimista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg">{finalData.pessimistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="p-4 border-t-4 border-teal-400 bg-teal-50">
                         <p className="font-bold text-teal-900">Realista (6% a.a.)</p>
-                        <p className="text-lg font-bold">{finalData.realista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg font-bold">{finalData.realistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="p-4 border-t-4 border-blue-400 bg-blue-50">
                         <p className="font-bold text-blue-900">Otimista (10% a.a.)</p>
-                        <p className="text-lg">{finalData.otimista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg">{finalData.optimistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                 </div>
             </div>
@@ -3314,7 +3490,7 @@ export default function App() {
     };
 
     const renderUpload = () => {
-        const isApiConfigured = !!import.meta.env.VITE_OPENROUTER_API_KEY && import.meta.env.VITE_OPENROUTER_API_KEY.length > 0;
+        const isApiConfigured = !!(import.meta as any).env.VITE_OPENROUTER_API_KEY && (import.meta as any).env.VITE_OPENROUTER_API_KEY.length > 0;
 
         // Agrupa modelos por provider para o select
         const groupedModels = OPENROUTER_MODELS.reduce((acc, model) => {
@@ -3492,11 +3668,339 @@ export default function App() {
         { id: 13, title: '14. Fluxo Financeiro', icon: ArrowRightLeft, render: renderCashFlow },
     ];
 
+    const renderPrintModal = () => {
+        if (!showPrintModal) return null;
+
+        const sections = [
+            { id: 'cover', label: 'Capa / Resumo Pessoal', key: 'cover' },
+            { id: 'personalData', label: 'Dados do Cliente', key: 'personalData' },
+            { id: 'budget', label: 'Orçamento (Metas)', key: 'budget' },
+            { id: 'cashFlow', label: 'Fluxo Mensal Consolidado', key: 'cashFlow' },
+            { id: 'realized', label: 'Lista de Movimentações', key: 'realized' },
+            { id: 'assets', label: 'Balanço Patrimonial', key: 'assets' },
+            { id: 'investments', label: 'Análise de Investimentos', key: 'investments' },
+            { id: 'insurance', label: 'Seguros', key: 'insurance' },
+            { id: 'simulation', label: 'Simulação Financeira', key: 'simulation' },
+            { id: 'pgbl', label: 'Planejamento Tributário (PGBL)', key: 'pgbl' },
+            { id: 'calculator', label: 'Calculadora de Decumulação', key: 'calculator' },
+        ];
+
+        return (
+            <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm print:hidden">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8 border border-slate-200">
+                    <div className="flex items-center justify-between mb-6">
+                        <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                                <FileText className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-900">Configurar Impressão</h2>
+                                <p className="text-sm text-gray-500">Selecione as seções que deseja incluir no relatório.</p>
+                            </div>
+                        </div>
+                        <button onClick={() => setShowPrintModal(false)} className="text-gray-400 hover:text-gray-600 p-2">
+                            <X className="w-6 h-6" />
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
+                        {sections.map((section) => (
+                            <label key={section.id} className="flex items-center gap-3 p-3 border rounded-xl hover:bg-gray-50 cursor-pointer transition-colors group">
+                                <div className="relative flex items-center">
+                                    <input
+                                        type="checkbox"
+                                        className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                        checked={(printConfig as any)[section.key]}
+                                        onChange={() => setPrintConfig(prev => ({ ...prev, [section.key]: !(prev as any)[section.key] }))}
+                                    />
+                                </div>
+                                <span className="text-sm font-medium text-gray-700 group-hover:text-gray-900">{section.label}</span>
+                            </label>
+                        ))}
+                    </div>
+
+                    <div className="flex gap-4">
+                        <button
+                            onClick={() => {
+                                const allOn = Object.keys(printConfig).reduce((acc, k) => ({ ...acc, [k]: true }), {});
+                                setPrintConfig(allOn as any);
+                            }}
+                            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors text-sm"
+                        >
+                            Selecionar Tudo
+                        </button>
+                        <button
+                            onClick={() => {
+                                setShowPrintModal(false);
+                                setTimeout(() => window.print(), 500);
+                            }}
+                            className="flex-[2] px-6 py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-3 shadow-lg shadow-blue-200"
+                        >
+                            <FileCheck className="w-5 h-5" />
+                            Gerar Relatório PDF
+                        </button>
+                    </div>
+                    <p className="text-[10px] text-center text-gray-400 mt-4 uppercase tracking-widest font-bold">
+                        Dica: Escolha "Salvar como PDF" nas opções da impressora.
+                    </p>
+                </div>
+            </div>
+        );
+    };
+
+    const renderInvoiceModal = () => {
+        if (!showInvoiceModal || !selectedTransactionForInvoice) return null;
+
+        const paidAmount = Math.abs(selectedTransactionForInvoice.amount);
+
+        return (
+            <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center">
+                            <CreditCard className="w-6 h-6" />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-900">Detalhes da Fatura</h2>
+                            <p className="text-sm text-gray-500">Verifique se o pagamento foi integral.</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4 mb-8">
+                        <div className="p-4 bg-gray-50 rounded-xl space-y-2">
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-500">Valor Pago (no extrato):</span>
+                                <span className="font-bold text-gray-900">{paidAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-500">Data:</span>
+                                <span className="text-gray-900">{selectedTransactionForInvoice.date.split('-').reverse().join('/')}</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-bold text-gray-700 mb-1">Qual o Valor Total desta Fatura?</label>
+                            <div className="relative">
+                                <span className="absolute left-3 top-3 text-gray-500">R$</span>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
+                                    value={invoiceTotalValue || ''}
+                                    onChange={e => setInvoiceTotalValue(parseFloat(e.target.value) || 0)}
+                                    placeholder="0,00"
+                                />
+                            </div>
+                            <p className="text-xs text-gray-400 mt-2">
+                                Se o valor total for maior que o pago, criaremos uma dívida automaticamente com o saldo restante.
+                            </p>
+                        </div>
+
+                        {invoiceTotalValue > paidAmount && (
+                            <div className="p-3 bg-red-50 text-red-600 rounded-lg flex items-center gap-2 text-sm font-medium animate-pulse">
+                                <AlertCircle className="w-4 h-4" />
+                                Saldo devedor: {(invoiceTotalValue - paidAmount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => {
+                                setShowInvoiceModal(false);
+                                setSelectedTransactionForInvoice(null);
+                            }}
+                            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleSaveInvoiceDebt}
+                            className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
+                        >
+                            Confirmar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const renderAddTransactionModal = () => {
+        if (!showAddTransaction) return null;
+
+        const currentCategories = data.categories.length > 0 ? data.categories : generateDefaultCategories();
+        const sortedCategories = [...currentCategories].sort((a, b) => a.name.localeCompare(b.name));
+        const groups = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+
+        return (
+            <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8 border border-slate-200">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                            <Plus className="w-6 h-6" />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-900">Novo Lançamento Manual</h2>
+                            <p className="text-sm text-gray-500">Adicione uma movimentação que não consta nos extratos.</p>
+                        </div>
+                    </div>
+
+                    <div className="flex bg-gray-100 p-1 rounded-xl mb-6">
+                        <button
+                            onClick={() => setNewTransaction({ ...newTransaction, transactionType: 'debit' })}
+                            className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${newTransaction.transactionType === 'debit' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Saída (Débito)
+                        </button>
+                        <button
+                            onClick={() => setNewTransaction({ ...newTransaction, transactionType: 'credit' })}
+                            className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${newTransaction.transactionType === 'credit' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Entrada (Crédito)
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Data</label>
+                            <input
+                                type="date"
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                value={newTransaction.date}
+                                onChange={e => setNewTransaction({ ...newTransaction, date: e.target.value })}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Valor (R$)</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0,00"
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-bold"
+                                value={newTransaction.amount || ''}
+                                onChange={e => setNewTransaction({ ...newTransaction, amount: parseFloat(e.target.value) || 0 })}
+                            />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Descrição</label>
+                            <input
+                                type="text"
+                                placeholder="Ex: Mercado Atacadão, Uber, etc."
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                value={newTransaction.description}
+                                onChange={e => setNewTransaction({ ...newTransaction, description: e.target.value })}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Grupo</label>
+                            <select
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                value={newTransaction.type}
+                                onChange={e => setNewTransaction({ ...newTransaction, type: e.target.value })}
+                            >
+                                {groups.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Categoria</label>
+                            <select
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                value={newTransaction.category}
+                                onChange={e => setNewTransaction({ ...newTransaction, category: e.target.value })}
+                            >
+                                <option value="">Selecione...</option>
+                                {sortedCategories.filter(c => c.group === newTransaction.type).map(cat => (
+                                    <option key={cat.id} value={cat.name}>{cat.name}</option>
+                                ))}
+                                <option value="Outros">Outros</option>
+                            </select>
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Instituição</label>
+                            <input
+                                type="text"
+                                placeholder="Manual, Dinheiro, Banco X..."
+                                className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                value={newTransaction.institution}
+                                onChange={e => setNewTransaction({ ...newTransaction, institution: e.target.value })}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                        <button
+                            onClick={() => setShowAddTransaction(false)}
+                            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleSaveManualTransaction}
+                            className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
+                        >
+                            Salvar Lançamento
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     if (loadingSession) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-blue-600" /></div>;
     if (!session) return <Auth />;
 
     return (
         <div className="flex min-h-screen bg-gray-50 text-gray-900 relative">
+            <style>{`
+                @media print {
+                    @page {
+                        margin: 1.5cm;
+                        size: auto;
+                    }
+                    button, .print:hidden, .print\\:hidden {
+                        display: none !important;
+                    }
+                    .print-section {
+                        page-break-inside: avoid;
+                    }
+                    .break-before-page {
+                        break-before: page;
+                    }
+                    body {
+                        background: white !important;
+                        color: black !important;
+                    }
+                    .bg-gray-50, .bg-slate-50 {
+                        background-color: white !important;
+                    }
+                    .bg-blue-600 {
+                        background-color: #2563eb !important;
+                        -webkit-print-color-adjust: exact;
+                    }
+                    .text-blue-600 {
+                        color: #2563eb !important;
+                    }
+                    /* Forçar exibição de cores e backgrounds */
+                    * {
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
+                }
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 4px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 10px;
+                }
+            `}</style>
+            {renderPrintModal()}
+            {renderInvoiceModal()}
+            {renderAddTransactionModal()}
             {/* PASSWORD CHANGE MODAL (FORCE OR VOLUNTARY) */}
             {(mustChangePassword || showPasswordModal) && (
                 <ForcePasswordChangeModal
@@ -3508,7 +4012,7 @@ export default function App() {
                 />
             )}
 
-            <aside className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-blue-900 text-white flex flex-col fixed h-full z-10 transition-all duration-300 overflow-y-auto custom-scrollbar`}>
+            <aside className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-blue-900 text-white flex flex-col fixed h-full z-10 transition-all duration-300 overflow-y-auto custom-scrollbar print:hidden`}>
                 <div className={`p-6 border-b border-blue-800 flex items-center ${isSidebarExpanded ? 'justify-start gap-3' : 'justify-center'}`}>
                     <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-lg shadow-blue-900/50">
                         <BrainCircuit className="w-6 h-6 text-white" />
@@ -3557,13 +4061,13 @@ export default function App() {
                 </div>
             </aside>
 
-            <main className={`flex-1 ${isSidebarExpanded ? 'ml-64' : 'ml-20'} p-8 relative transition-all duration-300`}>
+            <main className={`flex-1 ${isSidebarExpanded ? 'ml-64' : 'ml-20'} p-8 relative transition-all duration-300 print:ml-0 print:p-0`}>
                 {isLoadingData && (
-                    <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center backdrop-blur-sm">
+                    <div className="absolute inset-0 bg-white/70 z-50 flex items-center justify-center backdrop-blur-sm print:hidden">
                         <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
                     </div>
                 )}
-                <header className="flex justify-between items-center mb-8">
+                <header className="flex justify-between items-center mb-8 print:hidden">
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800">{TABS[activeTab].title}</h2>
                         {/* Ocultar subtítulo apenas na página 3 (ID 2) */}
@@ -3596,18 +4100,90 @@ export default function App() {
                             </div>
                         </div>
 
+                        <button
+                            onClick={() => setShowPrintModal(true)}
+                            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-full shadow-md hover:bg-blue-700 transition-all font-medium text-sm"
+                            title="Gerar Relatório PDF"
+                        >
+                            <FileText className="w-4 h-4" />
+                            Relatório
+                        </button>
+
                         <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold border-2 border-white shadow-sm">
                             {session.user.email?.charAt(0).toUpperCase()}
                         </div>
                     </div>
                 </header>
 
-                <div className="animate-fade-in-up">{TABS[activeTab].render()}</div>
+                <div className="animate-fade-in-up print:hidden">{TABS[activeTab].render()}</div>
+
+                {/* RELATÓRIO DE IMPRESSÃO (VISÍVEL APENAS NO PRINT) */}
+                <div className="hidden print:block space-y-12 bg-white min-h-screen p-0">
+                    {printConfig.cover && (
+                        <div className="print-section">
+                            {renderSummary()}
+                        </div>
+                    )}
+                    {printConfig.budget && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">2. Orçamento e Metas Mensais</h2>
+                            {renderBudget()}
+                        </div>
+                    )}
+                    {printConfig.cashFlow && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">3. Fluxo de Caixa Consolidado</h2>
+                            {renderCashFlow()}
+                        </div>
+                    )}
+                    {printConfig.assets && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">4. Balanço Patrimonial</h2>
+                            {renderBalanceSheet()}
+                        </div>
+                    )}
+                    {printConfig.investments && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">5. Análise de Portfólio</h2>
+                            {renderInvestments()}
+                        </div>
+                    )}
+                    {printConfig.pgbl && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">6. Planejamento Tributário</h2>
+                            {renderPGBL()}
+                        </div>
+                    )}
+                    {printConfig.simulation && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">7. Projeções de Independência Financeira</h2>
+                            {renderSimulation()}
+                            <div className="mt-10">
+                                {renderDetailedSimulation()}
+                            </div>
+                            <div className="mt-10">
+                                {renderProjectionScenarios()}
+                            </div>
+                        </div>
+                    )}
+                    {printConfig.calculator && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">8. Estratégia de Decumulação</h2>
+                            {renderDecumulation()}
+                        </div>
+                    )}
+                    {printConfig.realized && (
+                        <div className="break-before-page pt-10">
+                            <h2 className="text-3xl font-bold text-blue-900 mb-6 border-b-2 border-blue-100 pb-2">Apêndice: Detalhamento de Movimentações</h2>
+                            {renderRealized()}
+                        </div>
+                    )}
+                </div>
             </main>
 
             {/* SUCCESS TOAST */}
             {showSuccessAlert && (
-                <div className={`fixed bottom-6 right-6 z-50 animate-bounce-in max-w-sm w-full bg-white rounded-xl shadow-2xl border-l-8 ${alertType === 'error' ? 'border-red-500' : 'border-green-500'} p-5 flex items-start gap-4`}>
+                <div className={`fixed bottom-6 right-6 z-50 animate-bounce-in max-w-sm w-full bg-white rounded-xl shadow-2xl border-l-8 ${alertType === 'error' ? 'border-red-500' : 'border-green-500'} p-5 flex items-start gap-4 print:hidden`}>
                     {alertType === 'error' ? <AlertCircle className="w-6 h-6 text-red-600 mt-1" /> : <CheckCircle2 className="w-6 h-6 text-green-600 mt-1" />}
                     <div>
                         <h4 className="font-bold text-gray-900">{alertType === 'error' ? 'Atenção' : 'Sucesso!'}</h4>

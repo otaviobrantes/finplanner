@@ -1,7 +1,7 @@
 import { AppState, TransactionCategory, CategoryItem } from "../types";
 
 // Lista completa de modelos do OpenRouter para extração financeira
-// Inclui modelos GRATUITOS (:free) e modelos PAGOS (famosos)
+// Atualizada com base na lista oficial fornecida
 export const OPENROUTER_MODELS = [
   // ============================================
   // MODELOS PAGOS (PREMIUM) - Mais estáveis
@@ -9,97 +9,72 @@ export const OPENROUTER_MODELS = [
 
   // OpenAI
   { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI', context: '128K', free: false },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', context: '128K', free: false },
-  { id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo', provider: 'OpenAI', context: '128K', free: false },
+  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini (Recomendado)', provider: 'OpenAI', context: '128K', free: false },
   { id: 'openai/o1', name: 'o1', provider: 'OpenAI', context: '200K', free: false },
-  { id: 'openai/o1-mini', name: 'o1 Mini', provider: 'OpenAI', context: '128K', free: false },
 
   // Anthropic
-  { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic', context: '200K', free: false },
   { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'Anthropic', context: '200K', free: false },
-  { id: 'anthropic/claude-3.5-haiku', name: 'Claude 3.5 Haiku', provider: 'Anthropic', context: '200K', free: false },
   { id: 'anthropic/claude-3-opus', name: 'Claude 3 Opus', provider: 'Anthropic', context: '200K', free: false },
 
   // Google (Pagos)
-  { id: 'google/gemini-2.5-pro-preview', name: 'Gemini 2.5 Pro Preview', provider: 'Google', context: '1M', free: false },
-  { id: 'google/gemini-2.5-flash-preview', name: 'Gemini 2.5 Flash Preview', provider: 'Google', context: '1M', free: false },
   { id: 'google/gemini-pro-1.5', name: 'Gemini Pro 1.5', provider: 'Google', context: '2M', free: false },
+  { id: 'google/gemini-2.5-flash-preview-09-2025', name: 'Gemini 2.5 Flash Preview', provider: 'Google', context: '1M', free: false },
 
   // DeepSeek (Pagos)
-  { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'DeepSeek', context: '64K', free: false },
-  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'DeepSeek', context: '64K', free: false },
+  { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3 (Recomendado)', provider: 'DeepSeek', context: '64K', free: false },
+  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'DeepSeek', context: '164K', free: false },
 
   // ============================================
-  // MODELOS GRATUITOS (:free)
+  // MODELOS GRATUITOS (CONFIRMADOS :free)
   // ============================================
 
-  // Google (Free)
+  // Google
   { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google (Free)', context: '131K', free: true },
-  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash Experimental', provider: 'Google (Free)', context: '1.05M', free: true },
+  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash Exp', provider: 'Google (Free)', context: '1M', free: true },
+  { id: 'google/gemma-3-12b-it:free', name: 'Gemma 3 12B', provider: 'Google (Free)', context: '131K', free: true },
+  { id: 'google/gemma-3-4b-it:free', name: 'Gemma 3 4B', provider: 'Google (Free)', context: '32K', free: true },
 
-  // Meta (Free)
+  // Meta
   { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct', provider: 'Meta (Free)', context: '131K', free: true },
   { id: 'meta-llama/llama-3.2-3b-instruct:free', name: 'Llama 3.2 3B Instruct', provider: 'Meta (Free)', context: '131K', free: true },
   { id: 'meta-llama/llama-3.1-405b-instruct:free', name: 'Llama 3.1 405B Instruct', provider: 'Meta (Free)', context: '131K', free: true },
-  { id: 'meta-llama/llama-3.1-70b-instruct:free', name: 'Llama 3.1 70B Instruct', provider: 'Meta (Free)', context: '131K', free: true },
-  { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Llama 3.1 8B Instruct', provider: 'Meta (Free)', context: '131K', free: true },
 
-  // Qwen (Free)
-  { id: 'qwen/qwen2.5-vl-7b-instruct:free', name: 'Qwen2.5-VL 7B Instruct', provider: 'Qwen (Free)', context: '33K', free: true },
-  { id: 'qwen/qwen-2.5-72b-instruct:free', name: 'Qwen 2.5 72B Instruct', provider: 'Qwen (Free)', context: '131K', free: true },
-  { id: 'qwen/qwen-2.5-7b-instruct:free', name: 'Qwen 2.5 7B Instruct', provider: 'Qwen (Free)', context: '131K', free: true },
-  { id: 'qwen/qwen-2-7b-instruct:free', name: 'Qwen 2 7B Instruct', provider: 'Qwen (Free)', context: '32K', free: true },
+  // Qwen
+  { id: 'qwen/qwen-2.5-vl-7b-instruct:free', name: 'Qwen2.5-VL 7B Instruct', provider: 'Qwen (Free)', context: '32K', free: true },
+  { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder 480B A35B', provider: 'Qwen (Free)', context: '262K', free: true },
+  { id: 'qwen/qwen3-4b:free', name: 'Qwen3 4B', provider: 'Qwen (Free)', context: '40K', free: true },
 
-  // Nous Research (Free)
+  // Nous Research
   { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B Instruct', provider: 'Nous (Free)', context: '131K', free: true },
-  { id: 'nousresearch/hermes-3-llama-3.1-70b:free', name: 'Hermes 3 70B Instruct', provider: 'Nous (Free)', context: '131K', free: true },
 
-  // Mistral (Free)
-  { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B Instruct', provider: 'Mistral (Free)', context: '33K', free: true },
-  { id: 'mistralai/mistral-small-3.1-24b-instruct:free', name: 'Mistral Small 3.1 24B', provider: 'Mistral (Free)', context: '96K', free: true },
-  { id: 'mistralai/devstral-small:free', name: 'Devstral Small', provider: 'Mistral (Free)', context: '128K', free: true },
+  // Mistral
+  { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B Instruct', provider: 'Mistral (Free)', context: '32K', free: true },
+  { id: 'mistralai/mistral-small-3.1-24b-instruct:free', name: 'Mistral Small 3.1 24B', provider: 'Mistral (Free)', context: '128K', free: true },
+  { id: 'mistralai/devstral-2512:free', name: 'Devstral 2 2512', provider: 'Mistral (Free)', context: '262K', free: true },
 
-  // Microsoft (Free)
-  { id: 'microsoft/phi-4:free', name: 'Phi-4', provider: 'Microsoft (Free)', context: '16K', free: true },
-  { id: 'microsoft/phi-3-medium-128k-instruct:free', name: 'Phi-3 Medium 128K', provider: 'Microsoft (Free)', context: '128K', free: true },
-  { id: 'microsoft/phi-3-mini-128k-instruct:free', name: 'Phi-3 Mini 128K', provider: 'Microsoft (Free)', context: '128K', free: true },
+  // NVIDIA
+  { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B', provider: 'NVIDIA (Free)', context: '256K', free: true },
+  { id: 'nvidia/nemotron-nano-12b-v2-vl:free', name: 'Nemotron Nano 12B VL', provider: 'NVIDIA (Free)', context: '128K', free: true },
+  { id: 'nvidia/nemotron-nano-9b-v2:free', name: 'Nemotron Nano 9B', provider: 'NVIDIA (Free)', context: '128K', free: true },
 
-  // NVIDIA (Free)
-  { id: 'nvidia/llama-3.1-nemotron-70b-instruct:free', name: 'Nemotron 70B Instruct', provider: 'NVIDIA (Free)', context: '131K', free: true },
-
-  // DeepSeek (Free)
-  { id: 'deepseek/deepseek-r1-distill-llama-70b:free', name: 'DeepSeek R1 Distill 70B', provider: 'DeepSeek (Free)', context: '64K', free: true },
-  { id: 'deepseek/deepseek-r1-distill-qwen-32b:free', name: 'DeepSeek R1 Distill 32B', provider: 'DeepSeek (Free)', context: '64K', free: true },
-  { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1 0528', provider: 'DeepSeek (Free)', context: '64K', free: true },
-
-  // Hugging Face (Free)
-  { id: 'huggingfaceh4/zephyr-7b-beta:free', name: 'Zephyr 7B Beta', provider: 'HuggingFace (Free)', context: '32K', free: true },
-
-  // Google Gemma (Free - Mais versões)
-  { id: 'google/gemma-2-9b-it:free', name: 'Gemma 2 9B', provider: 'Google (Free)', context: '8K', free: true },
-  { id: 'google/gemma-3-4b-it:free', name: 'Gemma 3 4B', provider: 'Google (Free)', context: '131K', free: true },
-  { id: 'google/gemma-3-12b-it:free', name: 'Gemma 3 12B', provider: 'Google (Free)', context: '131K', free: true },
-
-  // OpenChat (Free)
-  { id: 'openchat/openchat-7b:free', name: 'OpenChat 7B', provider: 'OpenChat (Free)', context: '8K', free: true },
-
-  // AllenAI (Free)
-  { id: 'allenai/olmo-2-0325-32b-instruct:free', name: 'OLMo 2 32B Instruct', provider: 'AllenAI (Free)', context: '32K', free: true },
-
-  // Bytedance (Free)
-  { id: 'bytedance-research/ui-tars-72b:free', name: 'UI-TARS 72B', provider: 'Bytedance (Free)', context: '32K', free: true },
-
-  // Featherless (Free)  
-  { id: 'featherless/qwerky-72b:free', name: 'Qwerky 72B', provider: 'Featherless (Free)', context: '32K', free: true },
-
-  // TNG (Free)
+  // DeepSeek & TNG
+  { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1 0528', provider: 'DeepSeek (Free)', context: '163K', free: true },
   { id: 'tngtech/deepseek-r1t-chimera:free', name: 'DeepSeek R1T Chimera', provider: 'TNG (Free)', context: '64K', free: true },
+  { id: 'tngtech/deepseek-r1t2-chimera:free', name: 'DeepSeek R1T2 Chimera', provider: 'TNG (Free)', context: '163K', free: true },
 
-  // Moonshotai (Free)
-  { id: 'moonshotai/kimi-vl-a3b-thinking:free', name: 'Kimi VL A3B Thinking', provider: 'Moonshot (Free)', context: '128K', free: true },
+  // Outros
+  { id: 'allenai/olmo-3.1-32b-think:free', name: 'OLMo 3.1 32B Think', provider: 'AllenAI (Free)', context: '65K', free: true },
+  { id: 'allenai/olmo-3-32b-think:free', name: 'OLMo 3 32B Think', provider: 'AllenAI (Free)', context: '65K', free: true },
+  { id: 'xiaomi/mimo-v2-flash:free', name: 'MiMo-V2-Flash', provider: 'Xiaomi (Free)', context: '262K', free: true },
+  { id: 'kwaipilot/kat-coder-pro:free', name: 'KAT-Coder-Pro V1', provider: 'Kwaipilot (Free)', context: '256K', free: true },
+  { id: 'z-ai/glm-4.5-air:free', name: 'GLM 4.5 Air', provider: 'Z.AI (Free)', context: '131K', free: true },
+  { id: 'moonshotai/kimi-k2:free', name: 'Kimi K2 0711', provider: 'Moonshot (Free)', context: '32K', free: true },
+  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin Mistral 24B', provider: 'Venice (Free)', context: '32K', free: true },
+  { id: 'alibaba/tongyi-deepresearch-30b-a3b:free', name: 'Tongyi DeepResearch 30B', provider: 'Alibaba (Free)', context: '131K', free: true },
 
-  // Liquid (Free)
-  { id: 'liquid/lfm-7b:free', name: 'LFM 7B', provider: 'Liquid (Free)', context: '32K', free: true },
+  // OpenAI OSS
+  { id: 'openai/gpt-oss-120b:free', name: 'GPT OSS 120B', provider: 'OpenAI (Free)', context: '131K', free: true },
+  { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B', provider: 'OpenAI (Free)', context: '131K', free: true },
 ];
 
 export const extractFinancialDataWithOpenRouter = async (
@@ -263,7 +238,7 @@ export const extractFinancialDataWithOpenRouter = async (
         userMessage = "O provedor de IA está temporariamente indisponível. Tente novamente ou escolha outro modelo.";
       } else if (e.message?.includes("rate limit") || e.message?.includes("429")) {
         userMessage = "Limite de requisições atingido. Aguarde alguns segundos e tente novamente.";
-      } else if (e.message?.includes("400") || e.message?.includes("Bad Request")) {
+      } else if (e.message?.includes("400") || e.message?.includes("Bad Request") || e.message?.includes("not a valid model ID")) {
         userMessage = "Modelo não encontrado ou inválido. Selecione outro modelo.";
       }
 
