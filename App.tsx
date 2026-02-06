@@ -15,8 +15,20 @@ import {
     UploadCloud, Settings, ChevronRight, Activity, LogOut, FileCheck, AlertCircle, CheckCircle2, Loader2, Users, MapPin, Building, UserPlus, Trash2, Search, Sliders, Calendar, Lock, Key, X,
     ChevronLeft, Menu, MessageSquare, Edit2, Plus, Save, RotateCcw, Scale, BrainCircuit, Landmark, ArrowRightLeft, TrendingDown, LayoutGrid, Target, Check, CreditCard
 } from 'lucide-react';
-import { extractFinancialDataWithOpenRouter, OPENROUTER_MODELS } from './services/openRouterService';
-import { saveFinancialData, fetchClientData, fetchClients, createClient, deleteClient, updateTransactionCategory, fetchGlobalCategories, createGlobalCategory, deleteGlobalCategory } from './services/dbService';
+import { extractFinancialDataWithOpenRouter, OPENROUTER_MODELS, isKnownBank } from './services/openRouterService';
+import {
+    saveFinancialData,
+    fetchClientData,
+    fetchClients,
+    createClient,
+    deleteClient,
+    updateTransactionCategory,
+    updateTransaction,
+    deleteTransactionInDB,
+    fetchGlobalCategories,
+    createGlobalCategory,
+    deleteGlobalCategory
+} from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
 import { supabase } from './services/supabaseClient';
@@ -42,6 +54,28 @@ interface QueueItem {
 
 // Helper: Safe ID Generator (Avoids crypto.randomUUID crash on insecure contexts)
 const generateId = () => Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+
+const VALID_ASSET_TYPES = ['Ação', 'FII', 'Fundos', 'Multimercado', 'Renda Fixa', 'Tesouro Direto', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'Dívida', 'A Receber'] as const;
+
+// Helper para cores de badges de ativos
+const getAssetBadgeColor = (type: string) => {
+    switch (type) {
+        case 'Ação': return 'bg-blue-100 text-blue-700';
+        case 'FII': return 'bg-cyan-100 text-cyan-700';
+        case 'Fundos': return 'bg-indigo-100 text-indigo-700';
+        case 'Multimercado': return 'bg-sky-100 text-sky-700';
+        case 'Renda Fixa': return 'bg-slate-100 text-slate-700';
+        case 'Tesouro Direto': return 'bg-green-100 text-green-700';
+        case 'Exterior': return 'bg-rose-100 text-rose-700';
+        case 'Cripto': return 'bg-orange-100 text-orange-700';
+        case 'Previdência': return 'bg-teal-100 text-teal-700';
+        case 'Imóvel': return 'bg-purple-100 text-purple-700';
+        case 'Veículo': return 'bg-zinc-100 text-zinc-700';
+        case 'Dívida': return 'bg-red-100 text-red-700';
+        case 'A Receber': return 'bg-amber-100 text-amber-700';
+        default: return 'bg-gray-100 text-gray-700';
+    }
+};
 
 // Helper to determine group from category (Legacy Helper + Fallback)
 const getCategoryGroup = (cat: string): CategoryGroup => {
@@ -307,6 +341,7 @@ export default function App() {
 
     // --- ESTADO PARA LANÇAMENTO MANUAL (PÁGINA 11/3) ---
     const [showAddTransaction, setShowAddTransaction] = useState(false);
+    const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
     const [newTransaction, setNewTransaction] = useState<Partial<Transaction> & { transactionType: 'credit' | 'debit' }>({
         date: new Date().toISOString().split('T')[0],
         description: "",
@@ -318,7 +353,7 @@ export default function App() {
     });
     const [assetFormData, setAssetFormData] = useState<{
         ticker: string;
-        type: 'Ação' | 'FII' | 'Renda Fixa' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
+        type: 'Ação' | 'FII' | 'Fundos' | 'Multimercado' | 'Renda Fixa' | 'Tesouro Direto' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
         quantity: number;
         currentPrice: number;
         totalValue: number;
@@ -348,10 +383,7 @@ export default function App() {
         calculator: true
     });
 
-    // --- ESTADO PARA LÓGICA DE FATURA DE CARTÃO ---
-    const [showInvoiceModal, setShowInvoiceModal] = useState(false);
-    const [selectedTransactionForInvoice, setSelectedTransactionForInvoice] = useState<Transaction | null>(null);
-    const [invoiceTotalValue, setInvoiceTotalValue] = useState(0);
+
 
     // Sync capital de decumulação com o patrimônio do cliente carregado
     useEffect(() => {
@@ -920,52 +952,7 @@ export default function App() {
         }
     };
 
-    // --- HANDLERS PARA LÓGICA DE FATURA DE CARTÃO ---
-    const handleIdentifyInvoice = (transaction: Transaction) => {
-        setSelectedTransactionForInvoice(transaction);
-        setInvoiceTotalValue(Math.abs(transaction.amount)); // Default is the paid amount
-        setShowInvoiceModal(true);
-    };
 
-    const handleSaveInvoiceDebt = async () => {
-        if (!selectedTransactionForInvoice || !data.selectedClientId || !session?.user) return;
-
-        const paidAmount = Math.abs(selectedTransactionForInvoice.amount);
-        const remainder = invoiceTotalValue - paidAmount;
-
-        if (remainder > 0.01) {
-            // Cria automaticamente um passivo (dívida)
-            const newDebt: any = {
-                ticker: `Resíduo Fatura - ${selectedTransactionForInvoice.institution || 'Cartão'}`,
-                type: 'Dívida',
-                quantity: 1,
-                currentPrice: remainder,
-                totalValue: remainder,
-                institution: selectedTransactionForInvoice.institution || 'Cartão',
-                classification: 'Cartão de Crédito'
-            };
-
-            const updatedAssets = [...data.assets, newDebt];
-
-            setData(prev => ({
-                ...prev,
-                assets: updatedAssets
-            }));
-
-            await saveFinancialData(session.user.id, data.selectedClientId, { assets: updatedAssets });
-
-            setSuccessMessage(`Dívida de ${remainder.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} criada automaticamente.`);
-            setAlertType('success');
-            setShowSuccessAlert(true);
-        } else {
-            setSuccessMessage("Fatura paga integralmente. Nenhuma dívida criada.");
-            setAlertType('success');
-            setShowSuccessAlert(true);
-        }
-
-        setShowInvoiceModal(false);
-        setSelectedTransactionForInvoice(null);
-    };
 
     const handleLogout = async () => {
         await supabase.auth.signOut();
@@ -1059,6 +1046,12 @@ export default function App() {
                 let targetClientId = data.selectedClientId;
                 let targetClientName = extractedData.detectedClientName;
 
+                // Validação: Verifica se o nome detectado é um banco/instituição financeira
+                if (targetClientName && isKnownBank(targetClientName)) {
+                    addLog(`[${item.file.name}] ⚠️ Nome detectado "${targetClientName}" parece ser um banco/instituição. Ignorando detecção automática.`);
+                    targetClientName = undefined; // Força usar o cliente selecionado
+                }
+
                 if (targetClientName) {
                     const currentClients = await fetchClients(session.user.id);
                     const existing = currentClients.find(c => c.name.toLowerCase() === targetClientName?.toLowerCase());
@@ -1125,20 +1118,76 @@ export default function App() {
             return;
         }
 
-        const trans: Transaction = {
-            id: `manual-${Date.now()}`,
-            date: newTransaction.date || new Date().toISOString().split('T')[0],
-            description: newTransaction.description,
-            amount: newTransaction.transactionType === 'debit' ? -Math.abs(newTransaction.amount) : Math.abs(newTransaction.amount),
-            category: newTransaction.category,
-            type: newTransaction.type || "Essencial",
-            institution: newTransaction.institution || "Manual"
-        };
+        const amountValue = newTransaction.transactionType === 'debit' ? -Math.abs(newTransaction.amount) : Math.abs(newTransaction.amount);
 
-        setData(prev => ({
-            ...prev,
-            transactions: [trans, ...prev.transactions]
-        }));
+        if (editingTransactionId) {
+            // EDITING EXISTING
+            setData(prev => ({
+                ...prev,
+                transactions: prev.transactions.map(t =>
+                    t.id === editingTransactionId
+                        ? {
+                            ...t,
+                            date: newTransaction.date || t.date,
+                            description: newTransaction.description || t.description,
+                            amount: amountValue,
+                            category: newTransaction.category || t.category,
+                            type: newTransaction.type || t.type,
+                            institution: newTransaction.institution || t.institution
+                        }
+                        : t
+                )
+            }));
+
+            // PERSIST TO DB
+            if (data.selectedClientId) {
+                updateTransaction({
+                    id: editingTransactionId,
+                    date: newTransaction.date,
+                    description: newTransaction.description,
+                    amount: amountValue,
+                    category: newTransaction.category,
+                    type: newTransaction.type || "Essencial",
+                    institution: newTransaction.institution || "Manual"
+                }).catch(err => {
+                    console.error("Erro ao persistir edição:", err);
+                    alert("Erro ao salvar alterações no banco de dados.");
+                });
+            }
+
+            setEditingTransactionId(null);
+            setSuccessMessage("Lançamento atualizado com sucesso!");
+        } else {
+            // CREATING NEW
+            const trans: Transaction = {
+                id: `manual-${Date.now()}`,
+                date: newTransaction.date || new Date().toISOString().split('T')[0],
+                description: newTransaction.description,
+                amount: amountValue,
+                category: newTransaction.category,
+                type: newTransaction.type || "Essencial",
+                institution: newTransaction.institution || "Manual"
+            };
+
+            setData(prev => ({
+                ...prev,
+                transactions: [trans, ...prev.transactions]
+            }));
+
+            // PERSIST TO DB
+            if (data.selectedClientId && session?.user) {
+                saveFinancialData(session.user.id, data.selectedClientId, {
+                    transactions: [trans]
+                }).then(() => {
+                    // Reload to get the real DB IDs (UUIDs)
+                    if (data.selectedClientId) handleSelectClient(data.selectedClientId);
+                }).catch(err => {
+                    console.error("Erro ao persistir novo lançamento:", err);
+                });
+            }
+
+            setSuccessMessage("Lançamento adicionado com sucesso!");
+        }
 
         setShowAddTransaction(false);
         setNewTransaction({
@@ -1151,9 +1200,42 @@ export default function App() {
             transactionType: 'debit'
         });
 
-        setSuccessMessage("Lançamento adicionado com sucesso!");
         setShowSuccessAlert(true);
         setTimeout(() => setShowSuccessAlert(false), 3000);
+    };
+
+    const handleEditTransaction = (t: Transaction) => {
+        setEditingTransactionId(t.id);
+        setNewTransaction({
+            date: t.date,
+            description: t.description,
+            amount: Math.abs(t.amount),
+            category: t.category,
+            type: t.type as any,
+            institution: t.institution,
+            transactionType: t.amount > 0 ? 'credit' : 'debit'
+        });
+        setShowAddTransaction(true);
+    };
+
+    const handleDeleteTransaction = (id: string, description: string) => {
+        if (confirm(`Deseja realmente excluir a movimentação "${description}"?`)) {
+            setData(prev => ({
+                ...prev,
+                transactions: prev.transactions.filter(t => t.id !== id)
+            }));
+
+            // PERSIST TO DB
+            deleteTransactionInDB(id).catch(err => {
+                console.error("Erro ao excluir do banco:", err);
+                // No alert here to avoid double confirm, but log it
+            });
+
+            setSuccessMessage("Movimentação excluída.");
+            setAlertType('success');
+            setShowSuccessAlert(true);
+            setTimeout(() => setShowSuccessAlert(false), 3000);
+        }
     };
 
     const handleGroupBudgetChange = (group: string, value: number) => {
@@ -2074,15 +2156,22 @@ export default function App() {
                             </div>
                             <div className={`col-span-2 text-right font-bold ${t.amount > 0 ? 'text-green-600' : 'text-red-500'} flex items-center justify-end gap-2`}>
                                 {t.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                {t.category === TransactionCategory.CREDIT_CARD_PAYMENT && (
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button
-                                        onClick={() => handleIdentifyInvoice(t)}
-                                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-100 shadow-sm"
-                                        title="Detalhes da Fatura"
+                                        onClick={() => handleEditTransaction(t)}
+                                        className="p-1 text-gray-400 hover:text-blue-600"
+                                        title="Editar"
                                     >
-                                        <CreditCard className="w-4 h-4" />
+                                        <Edit2 className="w-3.5 h-3.5" />
                                     </button>
-                                )}
+                                    <button
+                                        onClick={() => handleDeleteTransaction(t.id, t.description)}
+                                        className="p-1 text-gray-400 hover:text-red-500"
+                                        title="Excluir"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     ))}
@@ -2101,9 +2190,7 @@ export default function App() {
         const netWorth = totalAssets - totalLiabilities;
 
         // Lista de tipos de ativos disponíveis
-        const assetTypes: Array<typeof assetFormData.type> = [
-            'Ação', 'FII', 'Renda Fixa', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'Veículo', 'A Receber'
-        ];
+        const assetTypes = VALID_ASSET_TYPES.filter(t => t !== 'Dívida');
 
         // Helper para encontrar índice original no array data.assets
         const getOriginalIndex = (item: typeof data.assets[0]): number => {
@@ -2290,7 +2377,6 @@ export default function App() {
                                         <th className="p-4">Tipo</th>
                                         <th className="p-4">Instituição</th>
                                         <th className="p-4 text-right">Valor</th>
-                                        <th className="p-4 text-center w-28">Ações</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y">
@@ -2300,18 +2386,14 @@ export default function App() {
                                             <tr key={idx} className="hover:bg-gray-50 group">
                                                 <td className="p-4 font-medium text-gray-900">{item.ticker}</td>
                                                 <td className="p-4 text-gray-500">
-                                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.type === 'A Receber' ? 'bg-amber-100 text-amber-700' :
-                                                        item.type === 'Imóvel' ? 'bg-purple-100 text-purple-700' :
-                                                            item.type === 'Veículo' ? 'bg-slate-100 text-slate-700' :
-                                                                'bg-blue-50 text-blue-700'
-                                                        }`}>
+                                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getAssetBadgeColor(item.type)}`}>
                                                         {item.type}
                                                     </span>
                                                 </td>
                                                 <td className="p-4 text-gray-500">{item.institution || '-'}</td>
-                                                <td className="p-4 text-right font-bold text-gray-800">{item.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                                                <td className="p-4">
-                                                    <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <td className="p-4 text-right font-bold text-gray-800 flex items-center justify-end gap-2">
+                                                    {item.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
                                                         <button
                                                             onClick={() => handleOpenAssetModal(originalIndex)}
                                                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -2412,8 +2494,15 @@ export default function App() {
 
     // PAGINA 5: INVESTIMENTOS
     const renderInvestments = () => {
-        const types = ['Todos', ...Array.from(new Set(data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo').map(a => a.type)))];
+        // Tipos que aparecem no filtro (investimentos puramente)
+        const filterTypes = ['Todos', 'Ação', 'FII', 'Fundos', 'Multimercado', 'Renda Fixa', 'Tesouro Direto', 'Exterior', 'Cripto', 'Previdência', 'Imóvel', 'A Receber'];
         const institutions = ['Todas', ...Array.from(new Set(data.assets.filter(a => a.type !== 'Dívida' && a.type !== 'Veículo').map(a => a.institution)))];
+
+        // Helper para encontrar índice original no array data.assets
+        const getOriginalIndex = (item: typeof data.assets[0]): number => {
+            return data.assets.findIndex(a => a.ticker === item.ticker && a.institution === item.institution && a.type === item.type);
+        };
+
 
         // Filtra Dívidas e Veículos (uso pessoal, não investimento) E aplica filtros finos
         const investmentAssets = data.assets.filter(a => {
@@ -2448,7 +2537,7 @@ export default function App() {
                                 value={investmentFilters.type}
                                 onChange={e => setInvestmentFilters(prev => ({ ...prev, type: e.target.value }))}
                             >
-                                {types.map(t => <option key={t} value={t}>{t}</option>)}
+                                {filterTypes.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
                         <div className="flex-1 md:w-40">
@@ -2471,7 +2560,9 @@ export default function App() {
                     </div>
                 </div>
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                    <h3 className="text-lg font-bold text-gray-800 mb-4">Carteira Detalhada</h3>
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-bold text-gray-800">Carteira Detalhada</h3>
+                    </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left">
                             <thead>
@@ -2484,20 +2575,47 @@ export default function App() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y">
-                                {investmentAssets.map((asset, i) => (
-                                    <tr key={i} className="group hover:bg-gray-50">
-                                        <td className="py-3 font-medium">{asset.ticker}</td>
-                                        <td className="py-3 text-gray-500">{asset.type}</td>
-                                        <td className="py-3 text-right text-gray-600">{asset.quantity > 0 ? asset.quantity : '-'}</td>
-                                        <td className="py-3 text-right text-gray-600">{asset.currentPrice > 0 ? asset.currentPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '-'}</td>
-                                        <td className="py-3 text-right font-bold text-gray-900">{asset.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                                    </tr>
-                                ))}
+                                {investmentAssets.map((asset, i) => {
+                                    const originalIndex = getOriginalIndex(asset);
+                                    return (
+                                        <tr key={i} className="group hover:bg-gray-50">
+                                            <td className="py-3 font-medium">{asset.ticker}</td>
+                                            <td className="py-3">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${getAssetBadgeColor(asset.type)}`}>
+                                                        {asset.type}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td className="py-3 text-right text-gray-600">{asset.quantity > 0 ? asset.quantity : '-'}</td>
+                                            <td className="py-3 text-right text-gray-600">{asset.currentPrice > 0 ? asset.currentPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '-'}</td>
+                                            <td className="py-3 text-right font-bold text-gray-900 flex items-center justify-end gap-2">
+                                                {asset.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                                                    <button
+                                                        onClick={() => handleOpenAssetModal(originalIndex)}
+                                                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                                        title="Editar"
+                                                    >
+                                                        <Edit2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteAsset(originalIndex)}
+                                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                                        title="Excluir"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                 </div>
-            </div>
+            </div >
         );
     };
 
@@ -2901,9 +3019,9 @@ export default function App() {
         for (let y = 0; y <= years; y++) {
             dataPoints.push({
                 year: new Date().getFullYear() + y,
-                pessimistic: Math.round(p),
-                realistic: Math.round(r),
-                optimistic: Math.round(o)
+                pessimista: Math.round(p),
+                realista: Math.round(r),
+                otimista: Math.round(o)
             });
             p = (p + contrib) * 1.04;
             r = (r + contrib) * 1.06;
@@ -2922,15 +3040,15 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center mt-6">
                     <div className="p-4 border-t-4 border-orange-400 bg-orange-50">
                         <p className="font-bold text-orange-900">Pessimista (4% a.a.)</p>
-                        <p className="text-lg">{finalData.pessimistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg">{finalData.pessimista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="p-4 border-t-4 border-teal-400 bg-teal-50">
                         <p className="font-bold text-teal-900">Realista (6% a.a.)</p>
-                        <p className="text-lg font-bold">{finalData.realistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg font-bold">{finalData.realista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="p-4 border-t-4 border-blue-400 bg-blue-50">
                         <p className="font-bold text-blue-900">Otimista (10% a.a.)</p>
-                        <p className="text-lg">{finalData.optimistic.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
+                        <p className="text-lg">{finalData.otimista.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</p>
                     </div>
                 </div>
             </div>
@@ -3748,83 +3866,7 @@ export default function App() {
         );
     };
 
-    const renderInvoiceModal = () => {
-        if (!showInvoiceModal || !selectedTransactionForInvoice) return null;
 
-        const paidAmount = Math.abs(selectedTransactionForInvoice.amount);
-
-        return (
-            <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 border border-slate-200">
-                    <div className="flex items-center gap-3 mb-6">
-                        <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center">
-                            <CreditCard className="w-6 h-6" />
-                        </div>
-                        <div>
-                            <h2 className="text-xl font-bold text-gray-900">Detalhes da Fatura</h2>
-                            <p className="text-sm text-gray-500">Verifique se o pagamento foi integral.</p>
-                        </div>
-                    </div>
-
-                    <div className="space-y-4 mb-8">
-                        <div className="p-4 bg-gray-50 rounded-xl space-y-2">
-                            <div className="flex justify-between text-sm">
-                                <span className="text-gray-500">Valor Pago (no extrato):</span>
-                                <span className="font-bold text-gray-900">{paidAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                            </div>
-                            <div className="flex justify-between text-sm">
-                                <span className="text-gray-500">Data:</span>
-                                <span className="text-gray-900">{selectedTransactionForInvoice.date.split('-').reverse().join('/')}</span>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-bold text-gray-700 mb-1">Qual o Valor Total desta Fatura?</label>
-                            <div className="relative">
-                                <span className="absolute left-3 top-3 text-gray-500">R$</span>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
-                                    value={invoiceTotalValue || ''}
-                                    onChange={e => setInvoiceTotalValue(parseFloat(e.target.value) || 0)}
-                                    placeholder="0,00"
-                                />
-                            </div>
-                            <p className="text-xs text-gray-400 mt-2">
-                                Se o valor total for maior que o pago, criaremos uma dívida automaticamente com o saldo restante.
-                            </p>
-                        </div>
-
-                        {invoiceTotalValue > paidAmount && (
-                            <div className="p-3 bg-red-50 text-red-600 rounded-lg flex items-center gap-2 text-sm font-medium animate-pulse">
-                                <AlertCircle className="w-4 h-4" />
-                                Saldo devedor: {(invoiceTotalValue - paidAmount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex gap-3">
-                        <button
-                            onClick={() => {
-                                setShowInvoiceModal(false);
-                                setSelectedTransactionForInvoice(null);
-                            }}
-                            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-                        >
-                            Cancelar
-                        </button>
-                        <button
-                            onClick={handleSaveInvoiceDebt}
-                            className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
-                        >
-                            Confirmar
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    };
 
     const renderAddTransactionModal = () => {
         if (!showAddTransaction) return null;
@@ -3838,11 +3880,15 @@ export default function App() {
                 <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8 border border-slate-200">
                     <div className="flex items-center gap-3 mb-6">
                         <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
-                            <Plus className="w-6 h-6" />
+                            {editingTransactionId ? <Edit2 className="w-6 h-6" /> : <Plus className="w-6 h-6" />}
                         </div>
                         <div>
-                            <h2 className="text-xl font-bold text-gray-900">Novo Lançamento Manual</h2>
-                            <p className="text-sm text-gray-500">Adicione uma movimentação que não consta nos extratos.</p>
+                            <h2 className="text-xl font-bold text-gray-900">
+                                {editingTransactionId ? 'Editar Lançamento' : 'Novo Lançamento Manual'}
+                            </h2>
+                            <p className="text-sm text-gray-500">
+                                {editingTransactionId ? 'Altere os dados da movimentação selecionada.' : 'Adicione uma movimentação que não consta nos extratos.'}
+                            </p>
                         </div>
                     </div>
 
@@ -3930,7 +3976,19 @@ export default function App() {
 
                     <div className="flex gap-3">
                         <button
-                            onClick={() => setShowAddTransaction(false)}
+                            onClick={() => {
+                                setShowAddTransaction(false);
+                                setEditingTransactionId(null);
+                                setNewTransaction({
+                                    date: new Date().toISOString().split('T')[0],
+                                    description: "",
+                                    amount: 0,
+                                    category: "",
+                                    type: "Essencial",
+                                    institution: "Manual",
+                                    transactionType: 'debit'
+                                });
+                            }}
                             className="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
                         >
                             Cancelar
@@ -3939,7 +3997,7 @@ export default function App() {
                             onClick={handleSaveManualTransaction}
                             className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
                         >
-                            Salvar Lançamento
+                            {editingTransactionId ? 'Salvar Alterações' : 'Salvar Lançamento'}
                         </button>
                     </div>
                 </div>
@@ -3999,7 +4057,7 @@ export default function App() {
                 }
             `}</style>
             {renderPrintModal()}
-            {renderInvoiceModal()}
+
             {renderAddTransactionModal()}
             {/* PASSWORD CHANGE MODAL (FORCE OR VOLUNTARY) */}
             {(mustChangePassword || showPasswordModal) && (

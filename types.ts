@@ -201,7 +201,7 @@ export interface Transaction {
 
 export interface Asset {
   ticker: string;
-  type: 'Ação' | 'FII' | 'Renda Fixa' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
+  type: 'Ação' | 'FII' | 'Fundos' | 'Multimercado' | 'Renda Fixa' | 'Tesouro Direto' | 'Exterior' | 'Cripto' | 'Previdência' | 'Imóvel' | 'Veículo' | 'Dívida' | 'A Receber';
   quantity: number;
   currentPrice: number;
   totalValue: number;

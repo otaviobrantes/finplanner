@@ -1,5 +1,67 @@
 import { AppState, TransactionCategory, CategoryItem } from "../types";
 
+// Lista de nomes de bancos/instituições financeiras brasileiras conhecidas
+// Usada para evitar que a IA identifique incorretamente o banco como cliente
+export const KNOWN_BRAZILIAN_BANKS = [
+  // Grandes Bancos
+  'itaú', 'itau', 'itaú unibanco', 'itau unibanco',
+  'bradesco', 'banco bradesco',
+  'santander', 'banco santander',
+  'banco do brasil', 'bb', 'banco brasil',
+  'caixa', 'caixa economica', 'caixa econômica', 'cef',
+  'nubank', 'nu pagamentos',
+  'inter', 'banco inter',
+  'c6', 'c6 bank', 'banco c6',
+  'btg', 'btg pactual', 'banco btg',
+  'safra', 'banco safra',
+  'sicredi', 'banco sicredi',
+  'sicoob', 'banco sicoob',
+  'banrisul', 'banco banrisul',
+  'original', 'banco original',
+  'pan', 'banco pan',
+  'bmg', 'banco bmg',
+  'neon', 'banco neon',
+  'next', 'banco next',
+  'picpay', 'picpay bank',
+  'mercado pago', 'mercadopago',
+  'pagseguro', 'pagbank',
+  'will bank', 'willbank',
+  'daycoval', 'banco daycoval',
+  'modal', 'banco modal',
+  'votorantim', 'banco votorantim', 'bv',
+  'abc', 'banco abc',
+  'sofisa', 'banco sofisa',
+  'pine', 'banco pine',
+  'agibank', 'banco agibank',
+  'digito', 'banco digito',
+  'bs2', 'banco bs2',
+  'topazio', 'banco topazio',
+  'master', 'banco master',
+  // Corretoras e Fintechs
+  'xp', 'xp investimentos', 'xp inc',
+  'rico', 'rico investimentos',
+  'clear', 'clear corretora',
+  'modalmais', 'modal mais',
+  'genial', 'genial investimentos',
+  'ágora', 'agora investimentos',
+  'easynvest', 'nuinvest',
+  'warren', 'warren brasil',
+  'avenue', 'avenue securities',
+  // Cartões
+  'visa', 'mastercard', 'elo', 'amex', 'american express', 'hipercard', 'diners'
+];
+
+// Função para verificar se um nome é provavelmente um banco/instituição
+export const isKnownBank = (name: string): boolean => {
+  if (!name) return false;
+  const normalizedName = name.toLowerCase().trim();
+  return KNOWN_BRAZILIAN_BANKS.some(bank =>
+    normalizedName === bank ||
+    normalizedName.includes(bank) ||
+    bank.includes(normalizedName)
+  );
+};
+
 // Lista completa de modelos do OpenRouter para extração financeira
 // Atualizada com base na lista oficial fornecida
 export const OPENROUTER_MODELS = [
@@ -95,39 +157,72 @@ export const extractFinancialDataWithOpenRouter = async (
   }
 
   const systemPrompt = `
-    You are a Senior Financial Auditor AI. Your task is to extract EVERY SINGLE transaction from a Brazilian bank statement or credit card bill with 100% precision.
+    You are a Senior Financial Auditor AI specialize in Brazilian banking documents.
+    Your task is to extract EVERY SINGLE transaction and investment asset with 100% precision.
+    You must be extremely thorough and never summarize or skip rows.
     Return ONLY a valid JSON object matching the requested schema.
   `;
 
   const userPrompt = `
     *** AUDIT PROTOCOL - FOLLOW STRICTLY ***
+    
+    *** STEP 1: DETECT DOCUMENT TYPE ***
+    Analyze the document and determine which type(s) it contains:
+    
+    A) "CREDIT CARD BILL" (Fatura): Keywords "Vencimento", "Pagamento Mínimo", "Limite", "Fatura".
+    B) "BANK STATEMENT" (Extrato): Keywords "Saldo", "Extrato", "Conta Corrente", "Pix".
+    C) "INVESTMENT REPORT" (Relatório de Investimentos): Keywords "Posição Detalhada", "Saldo Bruto", "Carteira", "Rentabilidade", "%Aloc", "CDI", "IPCA", "Pós Fixado", "Inflação", "Estratégia", "NTN-B".
+    
+    *** STEP 2: EXTRACT TRANSACTIONS (For types A and B) ***
     1. TARGET VALUE: Identify the "Total Amount" or "Total de Lançamentos" in the document header/footer. This is your checksum target.
     2. ROW SCANNING: Look for lines following the pattern: [DATE] [DESCRIPTION] [VALUE].
-    3. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 34,90) or have complex names (e.g., DM*MUBI, PRODUTOS GLOBO 06/12). 
+    3. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 34,90) or have complex names (e.g., DM*MUBI). 
     4. INSTALLMENTS: "06/12" means a monthly installment. Extract the current value for the transactions list.
-    5. CHECKSUM VALIDATION: Sum the ABSOLUTE VALUES of extracted transactions. Compare with the Target Value found in step 1. If they diverge significantly, RE-SCAN.
     
-    *** CRITICAL: DOCUMENT TYPE & SIGN LOGIC ***
-    1. DETECT TYPE:
-       - "CREDIT CARD BILL" (Fatura): Look for keywords "Vencimento", "Pagamento Mínimo", "Limite", "Fatura".
-       - "BANK STATEMENT" (Extrato): Look for keywords "Saldo", "Extrato", "Conta Corrente", "Pix".
+    *** SIGN LOGIC FOR TRANSACTIONS ***
+    - IF CREDIT CARD BILL: 
+      * Positive values in the PDF are usually PURCHASES/DEBITS -> You MUST convert them to NEGATIVE numbers.
+      * Negative values (marked with "-" or "CR") are PAYMENTS/CREDITS -> Convert to POSITIVE numbers.
+    - IF BANK STATEMENT:
+      * Positive values are INCOME/DEPOSITS -> Keep POSITIVE.
+      * Negative values are EXPENSES/WITHDRAWALS -> Keep NEGATIVE.
 
-    2. APPLY SIGNS BASED ON TYPE:
-       - IF CREDIT CARD BILL: 
-         * Positive values in the PDF are usually PURCHASES/DEBITS -> You MUST convert them to NEGATIVE numbers (e.g., 100.00 becomes -100.00).
-         * Negative values (often marked with "-" or "CR") are PAYMENTS/CREDITS -> Convert to POSITIVE numbers.
-       - IF BANK STATEMENT:
-         * Positive values are INCOME/DEPOSITS -> Keep POSITIVE.
-         * Negative values are EXPENSES/WITHDRAWALS -> Keep NEGATIVE.
+    *** STEP 3: EXTRACT ASSETS/INVESTMENTS (For type C - HIGHEST PRIORITY) ***
+    When you detect an Investment Report:
+    
+    1. SCAN ALL PAGES: Documents often have multiple pages (marked as --- PÁGINA X ---). You MUST process every page.
+    2. FIND ALL TABLES: Tables may be split across pages. Continue extracting rows until you reach a total footer or the end of the document.
+    3. EXTRACT EVERY SINGLE ROW: Each row with a value and a name is a SEPARATE asset.
+    4. DATA TO EXTRACT:
+       - "Ticker/Nome": Full product name (e.g., 'NTN-B - AGO/2026 - IPC-A + 5,41%')
+       - "Valor": From 'Saldo Bruto' or 'Valor Líquido' (Use Saldo Bruto if available)
+       - "Instituição": The bank/broker name (e.g., XP Investimentos, Banco Master)
+       
+    5. CRITICAL TYPE MAPPING: You MUST map the product to one of these EXACT strings for the "type" field:
+       - "Tesouro Direto": For NTN-B, NTN-F, LFT, LTN, and anything containing "Tesouro Direto".
+       - "Fundos": For products containing "FIF", "FIC", "Multimercado", "Ações" (as a fund), "Fundo", or "Advisory".
+       - "Renda Fixa": For CDB, LCA, LCI, LF, LC, CRI, CRA, Debêntures, Poupança.
+       - "Ação": For direct stocks (Ações) and domestic stock ETFs.
+       - "FII": For Fundos de Investimento Imobiliário.
+       - "Exterior": For offshore investments, global ETFs, Stocks in NYSE/NASDAQ.
+       - "Cripto": For Bitcoin, Ethereum, etc.
+       - "Previdência": For PGBL, VGBL.
+       - "Imóvel": For physical real estate.
+       - "Veículo": For cars, boats, etc.
+       - "Dívida": For loans, mortgages (liabilities).
+       
+    6. VALIDATION:
+       - Count your products. If you miss rows (like NTN-B or common funds), your audit fails.
+       - Do not summarize multiple rows into one.
 
     *** DATA MAPPING ***
-    - HOLDER: Found near "Titular" or "Nome do Pagador".
-    - CATEGORIZATION: Map each item to the most specific category provided below.
-    - INTERNATIONAL: Use the BRL (R$) converted value.
+    - HOLDER/CLIENT NAME: Found near "Titular", "Nome do Pagador", "Cliente".
+      CRITICAL: MUST be a PERSON's name, NOT a bank name.
+    - CATEGORIZATION: Map items to the provided categories.
 
     ${userContext ? `*** SPECIFIC USER INSTRUCTIONS: "${userContext}" ***` : ''}
 
-    --- VALID CATEGORIES ---
+    --- VALID CATEGORIES FOR TRANSACTIONS ---
     ${categoriesString}
 
     --- DOCUMENT CONTENT (OCR) ---
@@ -135,7 +230,7 @@ export const extractFinancialDataWithOpenRouter = async (
 
     *** OUTPUT SCHEMA ***
     {
-      "detectedClientName": "string",
+      "detectedClientName": "string | null",
       "personalData": {
         "name": "string",
         "cpf": "string",
@@ -152,14 +247,18 @@ export const extractFinancialDataWithOpenRouter = async (
       ],
       "assets": [
         {
-          "ticker": "string",
+          "ticker": "string (FULL product name)",
           "type": "Ação | FII | Renda Fixa | Exterior | Cripto | Previdência | Imóvel | Veículo | Dívida",
           "totalValue": number,
           "institution": "string"
         }
       ]
     }
+    
+    *** FINAL CHECK ***
+    Did you miss any page? Did you miss any table row? (e.g. NTN-B rows). Ensure ALL 100% of the data is in the JSON.
   `;
+
 
   // Função helper de delay
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

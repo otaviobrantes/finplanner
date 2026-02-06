@@ -1,6 +1,6 @@
 
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { AppState, Client, CategoryItem } from '../types';
+import { AppState, Client, CategoryItem, Transaction } from '../types';
 
 // --- GESTÃO DE CLIENTES (CONSULTOR) ---
 
@@ -51,6 +51,41 @@ export const updateTransactionCategory = async (transactionId: string, newCatego
 
     if (error) {
         console.error('Erro ao atualizar categoria:', error);
+        throw error;
+    }
+};
+
+export const updateTransaction = async (transaction: Partial<Transaction> & { id: string }) => {
+    if (!isSupabaseConfigured()) return;
+
+    const { error } = await supabase
+        .from('transactions')
+        .update({
+            date: transaction.date,
+            description: transaction.description,
+            amount: transaction.amount,
+            category: transaction.category,
+            type: transaction.type,
+            institution: transaction.institution
+        })
+        .eq('id', transaction.id);
+
+    if (error) {
+        console.error('Erro ao atualizar transação:', error);
+        throw error;
+    }
+};
+
+export const deleteTransactionInDB = async (transactionId: string) => {
+    if (!isSupabaseConfigured()) return;
+
+    const { error } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('id', transactionId);
+
+    if (error) {
+        console.error('Erro ao excluir transação:', error);
         throw error;
     }
 };
