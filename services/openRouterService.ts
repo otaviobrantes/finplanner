@@ -166,18 +166,40 @@ export const extractFinancialDataWithOpenRouter = async (
   const userPrompt = `
     *** AUDIT PROTOCOL - FOLLOW STRICTLY ***
     
+    *** IMPORTANT: OCR TEXT QUALITY ***
+    This text was extracted via OCR and may contain recognition errors:
+    - Letters may be confused: "I" <-> "l" <-> "1", "O" <-> "0", "S" <-> "5", "B" <-> "8"
+    - Spaces may be missing or extra
+    - Some characters may be garbled
+    - Use context to infer the correct values when uncertain
+    
     *** STEP 1: DETECT DOCUMENT TYPE ***
     Analyze the document and determine which type(s) it contains:
     
-    A) "CREDIT CARD BILL" (Fatura): Keywords "Vencimento", "Pagamento Mínimo", "Limite", "Fatura".
+    A) "CREDIT CARD BILL" (Fatura): Keywords "Vencimento", "Pagamento Mínimo", "Limite", "Fatura", "Lançamentos".
     B) "BANK STATEMENT" (Extrato): Keywords "Saldo", "Extrato", "Conta Corrente", "Pix".
     C) "INVESTMENT REPORT" (Relatório de Investimentos): Keywords "Posição Detalhada", "Saldo Bruto", "Carteira", "Rentabilidade", "%Aloc", "CDI", "IPCA", "Pós Fixado", "Inflação", "Estratégia", "NTN-B".
     
     *** STEP 2: EXTRACT TRANSACTIONS (For types A and B) ***
+    
+    ** VISA CREDIT CARD FORMAT **
+    Visa bills often use this format:
+    - Date indicator: "))) DD/MM" (the ")" symbols indicate a date)
+    - Two-line format per transaction:
+      Line 1: [DATE_INDICATOR] [ESTABLISHMENT_NAME] [VALUE]
+      Line 2: [CATEGORY] [CITY/LOCATION]
+    - Example:
+      "))) 13/08 TeixeiraENev-CT 81,00"
+      "DIVERSOS .SAO PAULO"
+    
+    ** EXTRACTION RULES **
     1. TARGET VALUE: Identify the "Total Amount" or "Total de Lançamentos" in the document header/footer. This is your checksum target.
     2. ROW SCANNING: Look for lines following the pattern: [DATE] [DESCRIPTION] [VALUE].
-    3. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 34,90) or have complex names (e.g., DM*MUBI). 
-    4. INSTALLMENTS: "06/12" means a monthly installment. Extract the current value for the transactions list.
+    3. DATE FORMATS: Accept "DD/MM", "DD/MM/YY", "DD/MM/YYYY". Assume current year (2025) if year is missing.
+    4. VALUE FORMATS: Accept "1.234,56" or "1234,56" or "1234.56". Brazilian format uses comma as decimal separator.
+    5. NO OMISSIONS: You MUST extract items even if they are small (e.g., R$ 5,00) or have complex names (e.g., DM*MUBI). 
+    6. INSTALLMENTS: "06/12" means a monthly installment. Extract the current value for the transactions list.
+    7. SUFFIX "-CT": Credit card purchases often end with "-CT" or similar. Include this in description.
     
     *** SIGN LOGIC FOR TRANSACTIONS ***
     - IF CREDIT CARD BILL: 
@@ -215,14 +237,43 @@ export const extractFinancialDataWithOpenRouter = async (
        - Count your products. If you miss rows (like NTN-B or common funds), your audit fails.
        - Do not summarize multiple rows into one.
 
-    *** DATA MAPPING ***
-    - HOLDER/CLIENT NAME: Found near "Titular", "Nome do Pagador", "Cliente".
-      CRITICAL: MUST be a PERSON's name, NOT a bank name.
-    - CATEGORIZATION: Map items to the provided categories.
+    *** CATEGORIZATION RULES ***
+    - HOLDER/CLIENT NAME: Found near "Titular", "Nome do Pagador", "Cliente", or at the top of the bill.
+      CRITICAL: MUST be a PERSON's name (e.g., "FERNANDO CARVALHO DE ALMEIDA"), NOT a bank name.
+      Look for patterns like "[NAME] (final XXXX)" where XXXX are card digits.
+    
+    *** MANDATORY CATEGORY ASSIGNMENT ***
+    You MUST assign EXACTLY ONE category from the list below to EVERY transaction.
+    - NEVER use null, empty string, or invent new categories
+    - ALWAYS choose the closest matching category from the list
+    - If unsure, use semantic similarity to pick the best option
+    
+    ** CATEGORY MATCHING EXAMPLES **
+    - "CARREFOUR", "PAO DE ACUCAR", "ASSAI" → Supermercado
+    - "SHELL", "IPIRANGA", "AUTO POSTO" → Combustível carro
+    - "RESTAURANTE", "PIZZARIA", "GRILL", "BUFFE" → Restaurantes/bares
+    - "FARMACIA", "DROGARIA", "DROGASIL" → Farmácia
+    - "UBER", "99", "TAXI" → Uber/Taxi
+    - "NETFLIX", "SPOTIFY", "DISNEY", "PRIME" → Mensalidade TV- Netflix/Spotify
+    - "AMAZON", "MERCADO LIVRE", "MAGALU" → Compras por impulso
+    - "HOTEL", "POUSADA", "AIRBNB" → Viagens curtas
+    - "PADARIA", "PANIFICADORA" → Padaria
+    - "CAFE", "STARBUCKS", "LANCHE" → Café / Lanches
+    - "CABELEIREIRO", "SALAO", "MANICURE" → Cabeleireiro/Manicure
+    - "CINEMA", "TEATRO", "INGRESSO" → Cinema/teatro
+    - "LIVRARIA", "SARAIVA" → Livraria / jornais
+    - "ESTACIONAMENTO", "PARKING" → Estacionamento
+    - "PEDÁGIO", "SEM PARAR" → Sem parar
+    - "DENTISTA", "ODONTO" → Dentista
+    - "HOSPITAL", "CLINICA MEDICA" → Hospital
+    - "ACADEMIA", "SMART FIT", "BLUEFIT" → Academia
+    - "VET", "PETSHOP", "COBASI" → PET (ração, vet, banho)
+    - "SCHOOL", "ESCOLA", "COLEGIO" → Escola/faculdade
+    - Unknown/unclear → Diversos (ONLY as last resort)
 
     ${userContext ? `*** SPECIFIC USER INSTRUCTIONS: "${userContext}" ***` : ''}
 
-    --- VALID CATEGORIES FOR TRANSACTIONS ---
+    --- VALID CATEGORIES (YOU MUST USE EXACTLY ONE OF THESE) ---
     ${categoriesString}
 
     --- DOCUMENT CONTENT (OCR) ---
@@ -230,7 +281,7 @@ export const extractFinancialDataWithOpenRouter = async (
 
     *** OUTPUT SCHEMA ***
     {
-      "detectedClientName": "string | null",
+      "detectedClientName": "string (NEVER null - use 'Desconhecido' if not found)",
       "personalData": {
         "name": "string",
         "cpf": "string",
@@ -239,16 +290,16 @@ export const extractFinancialDataWithOpenRouter = async (
       "transactions": [
         {
           "date": "YYYY-MM-DD",
-          "description": "string",
-          "amount": number,
-          "category": "string",
-          "institution": "string"
+          "description": "string (clean, readable description)",
+          "amount": number (NEGATIVE for expenses, POSITIVE for credits),
+          "category": "string (NEVER null - use 'Outros' if unknown)",
+          "institution": "string (e.g., 'Visa', 'Mastercard', bank name)"
         }
       ],
       "assets": [
         {
           "ticker": "string (FULL product name)",
-          "type": "Ação | FII | Renda Fixa | Exterior | Cripto | Previdência | Imóvel | Veículo | Dívida",
+          "type": "Ação | FII | Fundos | Tesouro Direto | Renda Fixa | Exterior | Cripto | Previdência | Imóvel | Veículo | Dívida",
           "totalValue": number,
           "institution": "string"
         }
@@ -256,7 +307,10 @@ export const extractFinancialDataWithOpenRouter = async (
     }
     
     *** FINAL CHECK ***
-    Did you miss any page? Did you miss any table row? (e.g. NTN-B rows). Ensure ALL 100% of the data is in the JSON.
+    1. Did you miss any page? Did you miss any table row? Ensure ALL 100% of the data is in the JSON.
+    2. Is any category null or empty? Fix it to "Outros".
+    3. Did you detect the client name correctly (a PERSON, not a bank)?
+    4. Are all amounts correct (expenses as NEGATIVE)?
   `;
 
 

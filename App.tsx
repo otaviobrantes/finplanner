@@ -1074,11 +1074,21 @@ export default function App() {
                 }
 
                 updateQueueItem(item.id, { status: 'saving' });
+
+                // Validação: garantir que nenhuma transação tenha categoria null/undefined
+                const validatedTransactions = (extractedData.transactions || []).map(t => ({
+                    ...t,
+                    category: t.category || 'Outros',
+                    institution: t.institution || 'Cartão',
+                    description: t.description || 'Transação não identificada'
+                }));
+
                 const saveData = {
                     personalData: { ...data.personalData, ...extractedData.personalData },
-                    transactions: extractedData.transactions || [],
+                    transactions: validatedTransactions,
                     assets: extractedData.assets || [],
                 };
+
 
                 const saveResult = await saveFinancialData(session.user.id, targetClientId, saveData);
 
