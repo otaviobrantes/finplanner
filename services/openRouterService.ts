@@ -270,11 +270,12 @@ export const extractFinancialDataWithOpenRouter = async (
     - "VET", "PETSHOP", "COBASI" → PET (ração, vet, banho)
     - "SCHOOL", "ESCOLA", "COLEGIO" → Escola/faculdade
     - Unknown/unclear → Diversos (ONLY as last resort)
+    
+    *** MANDATORY CATEGORY LIST ***
+    Return ONLY categories from the provided list. If no custom list is provided, use the defaults but prioritize semantic matching.
+    ${categoriesString}
 
     ${userContext ? `*** SPECIFIC USER INSTRUCTIONS: "${userContext}" ***` : ''}
-
-    --- VALID CATEGORIES (YOU MUST USE EXACTLY ONE OF THESE) ---
-    ${categoriesString}
 
     --- DOCUMENT CONTENT (OCR) ---
     ${fileContent}

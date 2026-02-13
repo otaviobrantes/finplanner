@@ -90,63 +90,78 @@ export const deleteTransactionInDB = async (transactionId: string) => {
     }
 };
 
-// --- PERSISTÊNCIA GLOBAL DE CATEGORIAS (TODO O SISTEMA) ---
+// --- GESTÃO DE CATEGORIAS (VINCULADAS AO USUÁRIO/CONSULTOR) ---
 
-export const fetchGlobalCategories = async (): Promise<CategoryItem[]> => {
+export const fetchUserCategories = async (userId: string): Promise<CategoryItem[]> => {
     if (!isSupabaseConfigured()) return [];
 
-    // Busca categorias personalizadas criadas por qualquer usuário na tabela GLOBAL
     const { data, error } = await supabase
-        .from('global_categories')
+        .from('categories')
         .select('*')
+        .eq('user_id', userId)
         .order('name');
 
     if (error) {
-        console.error("Erro ao buscar categorias globais:", error);
+        console.error("Erro ao buscar categorias do usuário:", error);
         return [];
     }
 
-    // Mapeia para o formato CategoryItem
     return data.map((item: any) => ({
         id: item.id,
         name: item.name,
-        group: item.category_group, // Mapeia da coluna do banco (snake_case) para o tipo (camelCase) se necessário
-        isCustom: true
+        group: item.group,
+        isCustom: true // Agora todas no DB são consideradas "persistidas"
     }));
 };
 
-export const createGlobalCategory = async (name: string, group: string): Promise<CategoryItem | null> => {
+export const createUserCategory = async (userId: string, name: string, group: string): Promise<CategoryItem | null> => {
     if (!isSupabaseConfigured()) return null;
 
     const { data, error } = await supabase
-        .from('global_categories')
-        .insert({ name: name, category_group: group })
+        .from('categories')
+        .insert({ user_id: userId, name: name, group: group })
         .select()
         .single();
 
     if (error) {
-        console.error("Erro ao criar categoria global:", error);
+        console.error("Erro ao criar categoria:", error);
         throw error;
     }
 
     return {
         id: data.id,
         name: data.name,
-        group: data.category_group,
+        group: data.group,
         isCustom: true
     };
 };
 
-export const deleteGlobalCategory = async (id: string) => {
+export const deleteUserCategory = async (id: string) => {
     if (!isSupabaseConfigured()) return;
 
     const { error } = await supabase
-        .from('global_categories')
+        .from('categories')
         .delete()
         .eq('id', id);
 
     if (error) {
-        console.error("Erro ao excluir categoria global:", error);
+        console.error("Erro ao excluir categoria:", error);
+        throw error;
+    }
+};
+
+export const initializeUserCategories = async (userId: string, categories: { name: string, group: string }[]) => {
+    if (!isSupabaseConfigured()) return;
+
+    const insertData = categories.map(c => ({
+        user_id: userId,
+        name: c.name,
+        group: c.group
+    }));
+
+    const { error } = await supabase.from('categories').insert(insertData);
+    if (error) {
+        console.error("Erro ao inicializar categorias:", error);
         throw error;
     }
 };

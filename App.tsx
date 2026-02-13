@@ -25,9 +25,10 @@ import {
     updateTransactionCategory,
     updateTransaction,
     deleteTransactionInDB,
-    fetchGlobalCategories,
-    createGlobalCategory,
-    deleteGlobalCategory
+    fetchUserCategories,
+    createUserCategory,
+    deleteUserCategory,
+    initializeUserCategories
 } from './services/dbService';
 import { uploadStatement } from './services/storageService';
 import { parseFileContent } from './services/fileParser';
@@ -109,7 +110,7 @@ const getCategoryGroup = (cat: string): CategoryGroup => {
     if (lowerCat.includes('entidade') || lowerCat.includes('oab') || lowerCat.includes('crm')) return 'Profissional';
 
     // Diversos / Outros
-    if (lowerCat.includes('diversos') || lowerCat.includes('outros')) return 'Outros';
+    if (lowerCat.includes('diversos') || lowerCat.includes('outros')) return 'Diversos';
 
     // Essencial (Fallback amplo)
     return 'Essencial';
@@ -398,12 +399,26 @@ export default function App() {
 
     // Função para carregar categorias globais e mesclar com as padrão
     const refreshCategories = async () => {
-        const globalCats = await fetchGlobalCategories();
-        const defaultCats = generateDefaultCategories();
-        // Mescla: Padrão + Globais do BD
+        if (!session?.user) return;
+
+        // 1. Tenta buscar categorias do banco (Específicas do usuário/consultor)
+        let dbCategories = await fetchUserCategories(session.user.id);
+
+        // 2. Se o banco estiver vazio (novo usuário), inicializa com os padrões
+        if (dbCategories.length === 0) {
+            console.log("Inicializando categorias padrão no banco de dados...");
+            const defaultCats = Object.values(TransactionCategory).map(cat => ({
+                name: cat,
+                group: getCategoryGroup(cat)
+            }));
+            await initializeUserCategories(session.user.id, defaultCats);
+            dbCategories = await fetchUserCategories(session.user.id);
+        }
+
+        // 3. Atualiza o estado global
         setData(prev => ({
             ...prev,
-            categories: [...defaultCats, ...globalCats]
+            categories: dbCategories
         }));
     };
 
@@ -537,7 +552,7 @@ export default function App() {
     // --- CATEGORY MANAGEMENT HANDLERS (GLOBAL DB) ---
 
     const handleAddCategory = async () => {
-        if (!newCategoryName.trim()) return;
+        if (!newCategoryName.trim() || !session?.user) return;
         const cleanName = newCategoryName.trim();
 
         // Validação de Duplicidade (Case Insensitive) no Front
@@ -549,29 +564,27 @@ export default function App() {
         }
 
         try {
-            // Cria no banco global
-            await createGlobalCategory(cleanName, newCategoryGroup);
+            // Cria no banco vinculado ao usuário
+            await createUserCategory(session.user.id, cleanName, newCategoryGroup);
 
             // Recarrega todas as categorias para sincronizar
             await refreshCategories();
 
             setNewCategoryName("");
-            setSuccessMessage("Categoria global criada com sucesso!");
+            setSuccessMessage("Categoria criada com sucesso!");
             setAlertType('success');
             setShowSuccessAlert(true);
         } catch (error) {
-            setSuccessMessage("Erro ao criar categoria global. Verifique o banco de dados.");
+            setSuccessMessage("Erro ao criar categoria. Verifique o banco de dados.");
             setAlertType('error');
             setShowSuccessAlert(true);
         }
     };
 
     const handleDeleteCategory = async (id: string) => {
-        // Confirmação direta, sem setTimeout para evitar bloqueio do navegador
-        const confirmed = window.confirm("Tem certeza que deseja remover esta categoria global? Isso afetará todos os usuários.");
+        // Confirmação direta
+        const confirmed = window.confirm("Tem certeza que deseja remover esta categoria?");
         if (!confirmed) return;
-
-        console.log("Iniciando exclusão de categoria:", id);
 
         // 1. Otimistic Update: Remove da UI imediatamente
         const previousCategories = [...data.categories];
@@ -582,25 +595,30 @@ export default function App() {
 
         try {
             // 2. Tenta deletar do banco
-            await deleteGlobalCategory(id);
-            console.log("Categoria excluída com sucesso do DB");
+            await deleteUserCategory(id);
         } catch (error) {
             // 3. Rollback em caso de erro
             console.error("Erro ao excluir:", error);
-            alert("Erro ao excluir categoria. Verifique se você tem permissão ou conexão com o banco de dados.");
+            alert("Erro ao excluir categoria.");
             // Restaura o estado anterior
             setData(prev => ({ ...prev, categories: previousCategories }));
         }
     };
 
-    const handleRestoreCategories = () => {
-        // Como o sistema agora é global, "Restaurar" significaria apagar TUDO do banco global? 
-        // Isso pode ser perigoso. Vamos apenas recarregar os dados do banco.
-        if (confirm("Isso irá recarregar a lista de categorias do servidor. Continuar?")) {
-            refreshCategories();
-            setSuccessMessage("Categorias sincronizadas com o servidor.");
-            setAlertType('success');
-            setShowSuccessAlert(true);
+    const handleRestoreCategories = async () => {
+        if (!session?.user) return;
+        if (confirm("Isso irá apagar todas as categorias atuais e restaurar o padrão original. Continuar?")) {
+            try {
+                // Deleta todas as categorias do usuário e reinicializa
+                const { error } = await supabase.from('categories').delete().eq('user_id', session.user.id);
+                if (error) throw error;
+                await refreshCategories();
+                setSuccessMessage("Categorias restauradas para o padrão!");
+                setAlertType('success');
+                setShowSuccessAlert(true);
+            } catch (error) {
+                alert("Erro ao restaurar categorias.");
+            }
         }
     };
 
@@ -1078,7 +1096,7 @@ export default function App() {
                 // Validação: garantir que nenhuma transação tenha categoria null/undefined
                 const validatedTransactions = (extractedData.transactions || []).map(t => ({
                     ...t,
-                    category: t.category || 'Outros',
+                    category: t.category || 'Diversos',
                     institution: t.institution || 'Cartão',
                     description: t.description || 'Transação não identificada'
                 }));
@@ -1845,7 +1863,7 @@ export default function App() {
         };
 
         // Ordem preferencial de exibição
-        const preferredOrder = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+        const preferredOrder = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Diversos'];
 
         // Determina quais grupos exibir
         // 1. Grupos com transações existentes
@@ -1872,7 +1890,7 @@ export default function App() {
         });
 
         // Prepara dados para o gráfico (apenas realizado ou metas?)
-        // Vamos manter o gráfico de Realizado por enquanto para consistência, 
+        // Vamos manter o gráfico de Realizado por enquanto para consistência,
         // mas filtrando apenas o que tem valor > 0.
         const chartData = sortedGroups.map(group => {
             const groupTrans = data.transactions.filter(t => getGroupForChart(t.category) === group);
@@ -2637,7 +2655,7 @@ export default function App() {
 
         // 3. Agrupamento
         const groupedCategories = sortedCategories.reduce((acc, cat) => {
-            const groupKey = cat.group || 'Outros';
+            const groupKey = cat.group || 'Diversos';
             if (!acc[groupKey]) acc[groupKey] = [];
             acc[groupKey].push(cat);
             return acc;
@@ -2645,7 +2663,8 @@ export default function App() {
 
         // 4. Definição da Ordem dos Grupos (Dinâmica)
         // Pega a lista padrão, mas adiciona qualquer grupo extra que esteja nos dados atuais
-        const defaultGroupOrder: string[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+        const defaultGroupOrder: string[] = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes',
+            'Profissional', 'Diversos'];
         const currentGroups = Object.keys(groupedCategories);
         const finalGroupOrder = Array.from(new Set([...defaultGroupOrder, ...currentGroups]));
 
@@ -3883,7 +3902,7 @@ export default function App() {
 
         const currentCategories = data.categories.length > 0 ? data.categories : generateDefaultCategories();
         const sortedCategories = [...currentCategories].sort((a, b) => a.name.localeCompare(b.name));
-        const groups = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Outros'];
+        const groups = ['Receitas', 'Essencial', 'Saúde', 'Social', 'Transporte', 'Financeiro', 'Extra', 'Presentes', 'Profissional', 'Diversos'];
 
         return (
             <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -3969,7 +3988,7 @@ export default function App() {
                                 {sortedCategories.filter(c => c.group === newTransaction.type).map(cat => (
                                     <option key={cat.id} value={cat.name}>{cat.name}</option>
                                 ))}
-                                <option value="Outros">Outros</option>
+                                <option value="Diversos">Diversos</option>
                             </select>
                         </div>
                         <div className="md:col-span-2">
